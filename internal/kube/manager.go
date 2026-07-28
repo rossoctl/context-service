@@ -177,7 +177,7 @@ func buildSandbox(config Config, request pool.CreateRequest, index int) *unstruc
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "agents.x-k8s.io/v1beta1", "kind": "Sandbox",
 		"metadata": map[string]any{
-			"name": fmt.Sprintf("%s-%d", request.Name, index), "namespace": config.Namespace,
+			"name": fmt.Sprintf("sandbox-%s-%d", request.Name, index), "namespace": config.Namespace,
 			"labels": labels,
 		},
 		"spec": map[string]any{

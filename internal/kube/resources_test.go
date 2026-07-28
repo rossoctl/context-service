@@ -17,7 +17,7 @@ func TestBuildSharedPoolResources(t *testing.T) {
 	}
 
 	sandbox := buildSandbox(Config{Namespace: "serverless-harness", SandboxImage: "sandbox:test"}, request, 2)
-	if sandbox.GetName() != "bugstone-1-2" {
+	if sandbox.GetName() != "sandbox-bugstone-1-2" {
 		t.Fatalf("sandbox name = %q", sandbox.GetName())
 	}
 	claim, found, err := unstructuredNestedString(sandbox.Object, "spec", "podTemplate", "spec", "volumes", "0", "persistentVolumeClaim", "claimName")
