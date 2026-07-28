@@ -10,12 +10,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func buildPVC(namespace string, request pool.CreateRequest) *corev1.PersistentVolumeClaim {
+func buildPVC(namespace string, request pool.CreateRequest, index int) *corev1.PersistentVolumeClaim {
 	labels := map[string]string{
 		poolLabel: request.Name, managedLabel: managedBy, replicasLabel: strconv.Itoa(request.Replicas),
 	}
 	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: pvcName(request.Name), Namespace: namespace, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: pvcName(request, index), Namespace: namespace, Labels: labels},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.PersistentVolumeAccessMode(request.Workspace.AccessMode)},
 			Resources: corev1.VolumeResourceRequirements{
@@ -29,6 +29,11 @@ func buildPVC(namespace string, request pool.CreateRequest) *corev1.PersistentVo
 	return pvc
 }
 
-func pvcName(poolName string) string { return poolName + "-workspace" }
+func pvcName(request pool.CreateRequest, index int) string {
+	if request.Workspace.AccessMode == string(corev1.ReadWriteMany) {
+		return request.Name + "-workspace"
+	}
+	return fmt.Sprintf("%s-workspace-%d", request.Name, index)
+}
 
 func selectorFor(poolName string) string { return fmt.Sprintf("%s=%s", poolLabel, poolName) }

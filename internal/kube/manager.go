@@ -48,35 +48,45 @@ func NewManager(config Config) (*Manager, error) {
 }
 
 func (m *Manager) Create(ctx context.Context, request pool.CreateRequest) (pool.Pool, error) {
-	pvc := buildPVC(m.config.Namespace, request)
-	if _, err := m.core.CoreV1().PersistentVolumeClaims(m.config.Namespace).Create(ctx, pvc, metav1.CreateOptions{}); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return pool.Pool{}, pool.ErrAlreadyExists
+	pvcCount := request.Replicas
+	if request.Workspace.AccessMode == string(corev1.ReadWriteMany) {
+		pvcCount = 1
+	}
+	createdPVCs := make([]string, 0, pvcCount)
+	for index := 0; index < pvcCount; index++ {
+		pvc := buildPVC(m.config.Namespace, request, index)
+		if _, err := m.core.CoreV1().PersistentVolumeClaims(m.config.Namespace).Create(ctx, pvc, metav1.CreateOptions{}); err != nil {
+			m.rollback(ctx, createdPVCs, nil)
+			if apierrors.IsAlreadyExists(err) {
+				return pool.Pool{}, pool.ErrAlreadyExists
+			}
+			return pool.Pool{}, fmt.Errorf("create workspace PVC %s: %w", pvc.Name, err)
 		}
-		return pool.Pool{}, fmt.Errorf("create workspace PVC: %w", err)
+		createdPVCs = append(createdPVCs, pvc.Name)
 	}
 
-	created := make([]string, 0, request.Replicas)
+	createdSandboxes := make([]string, 0, request.Replicas)
 	for index := 0; index < request.Replicas; index++ {
 		sandbox := buildSandbox(m.config, request, index)
 		if _, err := m.dynamic.Resource(sandboxResource).Namespace(m.config.Namespace).Create(ctx, sandbox, metav1.CreateOptions{}); err != nil {
-			m.rollback(ctx, request.Name, created)
+			m.rollback(ctx, createdPVCs, createdSandboxes)
 			return pool.Pool{}, fmt.Errorf("create sandbox %d: %w", index, err)
 		}
-		created = append(created, sandbox.GetName())
+		createdSandboxes = append(createdSandboxes, sandbox.GetName())
 	}
 
 	return m.Get(ctx, request.Name)
 }
 
 func (m *Manager) Get(ctx context.Context, name string) (pool.Pool, error) {
-	pvc, err := m.core.CoreV1().PersistentVolumeClaims(m.config.Namespace).Get(ctx, pvcName(name), metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
+	pvcs, err := m.core.CoreV1().PersistentVolumeClaims(m.config.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selectorFor(name)})
+	if err != nil {
+		return pool.Pool{}, fmt.Errorf("list workspace PVCs: %w", err)
+	}
+	if len(pvcs.Items) == 0 {
 		return pool.Pool{}, pool.ErrNotFound
 	}
-	if err != nil {
-		return pool.Pool{}, fmt.Errorf("get workspace PVC: %w", err)
-	}
+	pvc := &pvcs.Items[0]
 
 	replicas, err := strconv.Atoi(pvc.Labels[replicasLabel])
 	if err != nil {
@@ -123,21 +133,29 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 			return fmt.Errorf("delete sandbox %s: %w", sandbox.GetName(), err)
 		}
 	}
-	if err := m.core.CoreV1().PersistentVolumeClaims(m.config.Namespace).Delete(ctx, pvcName(name), metav1.DeleteOptions{}); err != nil {
-		if apierrors.IsNotFound(err) {
-			return pool.ErrNotFound
+	pvcs, err := m.core.CoreV1().PersistentVolumeClaims(m.config.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selectorFor(name)})
+	if err != nil {
+		return fmt.Errorf("list workspace PVCs: %w", err)
+	}
+	if len(pvcs.Items) == 0 && len(list.Items) == 0 {
+		return pool.ErrNotFound
+	}
+	for _, pvc := range pvcs.Items {
+		if err := m.core.CoreV1().PersistentVolumeClaims(m.config.Namespace).Delete(ctx, pvc.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete workspace PVC %s: %w", pvc.Name, err)
 		}
-		return fmt.Errorf("delete workspace PVC: %w", err)
 	}
 	return nil
 }
 
-func (m *Manager) rollback(ctx context.Context, name string, sandboxes []string) {
+func (m *Manager) rollback(ctx context.Context, pvcs, sandboxes []string) {
 	resources := m.dynamic.Resource(sandboxResource).Namespace(m.config.Namespace)
 	for _, sandbox := range sandboxes {
 		_ = resources.Delete(ctx, sandbox, metav1.DeleteOptions{})
 	}
-	_ = m.core.CoreV1().PersistentVolumeClaims(m.config.Namespace).Delete(ctx, pvcName(name), metav1.DeleteOptions{})
+	for _, pvc := range pvcs {
+		_ = m.core.CoreV1().PersistentVolumeClaims(m.config.Namespace).Delete(ctx, pvc, metav1.DeleteOptions{})
+	}
 }
 
 func podReady(pod corev1.Pod) bool {
@@ -168,7 +186,7 @@ func buildSandbox(config Config, request pool.CreateRequest, index int) *unstruc
 		}},
 		"volumes": []any{map[string]any{
 			"name":                  workspaceName,
-			"persistentVolumeClaim": map[string]any{"claimName": pvcName(request.Name)},
+			"persistentVolumeClaim": map[string]any{"claimName": pvcName(request, index)},
 		}},
 	}
 	if config.SandboxServiceAccount != "" {

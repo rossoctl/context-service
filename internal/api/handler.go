@@ -91,9 +91,6 @@ func validateCreate(request pool.CreateRequest) error {
 	switch request.Workspace.AccessMode {
 	case "ReadWriteMany":
 	case "ReadWriteOnce":
-		if request.Replicas != 1 {
-			return errors.New("ReadWriteOnce supports exactly one sandbox")
-		}
 	default:
 		return fmt.Errorf("workspace.accessMode must be ReadWriteMany or ReadWriteOnce")
 	}

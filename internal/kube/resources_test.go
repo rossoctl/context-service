@@ -1,6 +1,7 @@
 package kube
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/rossoctl/context-service/internal/pool"
@@ -11,7 +12,7 @@ func TestBuildSharedPoolResources(t *testing.T) {
 		Name: "bugstone-1", Replicas: 3,
 		Workspace: pool.Workspace{Size: "5Gi", AccessMode: "ReadWriteMany", StorageClass: "ibm-scale-csi"},
 	}
-	pvc := buildPVC("serverless-harness", request)
+	pvc := buildPVC("serverless-harness", request, 0)
 	if pvc.Name != "bugstone-1-workspace" || pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != "ibm-scale-csi" {
 		t.Fatalf("unexpected PVC: %#v", pvc)
 	}
@@ -23,6 +24,25 @@ func TestBuildSharedPoolResources(t *testing.T) {
 	claim, found, err := unstructuredNestedString(sandbox.Object, "spec", "podTemplate", "spec", "volumes", "0", "persistentVolumeClaim", "claimName")
 	if err != nil || !found || claim != "bugstone-1-workspace" {
 		t.Fatalf("workspace claim = %q, found=%v, err=%v", claim, found, err)
+	}
+}
+
+func TestBuildDedicatedPoolResources(t *testing.T) {
+	request := pool.CreateRequest{
+		Name: "review", Replicas: 3,
+		Workspace: pool.Workspace{Size: "2Gi", AccessMode: "ReadWriteOnce", StorageClass: "ibm-scale-csi"},
+	}
+	for index := 0; index < request.Replicas; index++ {
+		pvc := buildPVC("serverless-harness", request, index)
+		expected := fmt.Sprintf("review-workspace-%d", index)
+		if pvc.Name != expected {
+			t.Fatalf("PVC %d name = %q, want %q", index, pvc.Name, expected)
+		}
+		sandbox := buildSandbox(Config{Namespace: "serverless-harness", SandboxImage: "sandbox:test"}, request, index)
+		claim, found, err := unstructuredNestedString(sandbox.Object, "spec", "podTemplate", "spec", "volumes", "0", "persistentVolumeClaim", "claimName")
+		if err != nil || !found || claim != expected {
+			t.Fatalf("sandbox %d claim = %q, found=%v, err=%v", index, claim, found, err)
+		}
 	}
 }
 
