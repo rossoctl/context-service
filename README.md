@@ -6,6 +6,8 @@ The first integration target is serverless-harness: it requests a pool at run ti
 
 Read the long-term [vision](VISION.md) and the short [design and workflow](docs/design.md).
 
+For the current development cluster, see [deploying to agentic-cloud](docs/deploy-agentic-cloud.md).
+
 Status: early prototype. The API is not stable.
 
 ## CLI
