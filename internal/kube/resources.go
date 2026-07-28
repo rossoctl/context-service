@@ -30,6 +30,9 @@ func buildPVC(namespace string, request pool.CreateRequest, index int) *corev1.P
 }
 
 func pvcName(request pool.CreateRequest, index int) string {
+	if request.Workspace.ClaimName != "" {
+		return request.Workspace.ClaimName
+	}
 	if request.Workspace.AccessMode == string(corev1.ReadWriteMany) {
 		return request.Name + "-workspace"
 	}

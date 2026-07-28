@@ -30,3 +30,12 @@ This proves that sandbox and workspace topology can be chosen at run time instea
 - The agent-sandbox controller owns the Sandbox-to-Pod lifecycle.
 - The CSI driver owns volume provisioning and attachment.
 - Session history, semantic memory, snapshots, retention policy, and Rossoctl integration are not part of this first slice.
+
+## Workspace ownership
+
+Context Service supports two workspace lifecycles:
+
+- A managed workspace is created with its sandbox pool and deleted with the pool. RWX creates one shared PVC; RWO creates one dedicated PVC per sandbox.
+- An attached workspace references an existing PVC. The caller explicitly chooses a read-only or read-write mount. Context Service never deletes the external claim when the sandbox pool is released.
+
+Read-only is a mount property rather than a PVC access mode. IBM Storage Scale CSI does not dynamically provision `ReadOnlyMany` volumes, but it does enforce read-only mounts of an existing RWX claim.

@@ -90,22 +90,32 @@ func create(c *client.Client, args []string) error {
 	size := flags.String("s", "1Gi", "workspace size")
 	storageClass := flags.String("c", os.Getenv("CS_STORAGE_CLASS"), "storage class")
 	shared := flags.Bool("shared", false, "use one RWX workspace shared by two sandboxes")
+	claimName := flags.String("claim", "", "mount an existing PVC instead of creating workspace storage")
+	readOnly := flags.Bool("read-only", false, "mount the existing claim read-only")
+	readWrite := flags.Bool("read-write", false, "mount the existing claim read-write")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"create"}) }
 	name, err := parseName(flags, args)
 	if err != nil {
 		return err
 	}
-	accessMode := "ReadWriteOnce"
-	if *shared {
-		accessMode = "ReadWriteMany"
+	workspace := pool.Workspace{Size: *size, AccessMode: "ReadWriteOnce", StorageClass: *storageClass}
+	if *claimName != "" {
+		if *readOnly == *readWrite {
+			return errors.New("--claim requires exactly one of --read-only or --read-write")
+		}
+		workspace = pool.Workspace{ClaimName: *claimName, ReadOnly: readOnly}
+	} else if *readOnly || *readWrite {
+		return errors.New("--read-only and --read-write require --claim")
+	} else if *shared {
+		workspace.AccessMode = "ReadWriteMany"
 		if *replicas == 1 {
 			*replicas = 2
 		}
 	}
 	result, err := c.Create(context.Background(), pool.CreateRequest{
 		Name: name, Replicas: *replicas,
-		Workspace: pool.Workspace{Size: *size, AccessMode: accessMode, StorageClass: *storageClass},
+		Workspace: workspace,
 	})
 	if err != nil {
 		return err
@@ -218,6 +228,9 @@ Create one sandbox with a 1Gi RWO workspace by default.
 
 Options:
   --shared             Create two sandboxes sharing one RWX workspace
+  --claim NAME          Mount an existing PVC; CS will not delete it
+  --read-only           Mount the existing claim read-only (requires --claim)
+  --read-write          Mount the existing claim read-write (requires --claim)
   -n NUMBER            Number of sandboxes (default 1, or 2 with --shared)
   -s SIZE              Workspace size (default 1Gi)
   -c STORAGE_CLASS     Storage class (default CS_STORAGE_CLASS)
@@ -227,6 +240,8 @@ Examples:
   contextctl create demo
   contextctl create demo --shared
   contextctl create demo --shared -n 3 -s 5Gi
+  contextctl create readers --claim prepared-workspace --read-only -n 3
+  contextctl create writer --claim prepared-workspace --read-write
 `)
 	case "get":
 		fmt.Print("Usage: contextctl get NAME [--json]\n")

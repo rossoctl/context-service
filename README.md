@@ -45,4 +45,20 @@ A single-sandbox pool needs no options:
 bin/contextctl create demo
 ```
 
+Attach an existing populated PVC read-only to a sandbox pool:
+
+```sh
+bin/contextctl create readers --claim prepared-workspace --read-only -n 3
+bin/contextctl wait readers
+bin/contextctl rm readers
+```
+
+Attach it read-write instead:
+
+```sh
+bin/contextctl create writer --claim prepared-workspace --read-write
+```
+
+`--claim` requires exactly one of `--read-only` or `--read-write`. Deleting either pool removes its sandboxes but does not delete the externally owned PVC.
+
 Run `bin/contextctl help` or `bin/contextctl help create` for defaults, options, and examples.

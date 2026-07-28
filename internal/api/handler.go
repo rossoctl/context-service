@@ -11,6 +11,7 @@ import (
 
 	"github.com/rossoctl/context-service/internal/pool"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 const ReadHeaderTimeout = 5 * time.Second
@@ -81,6 +82,21 @@ func validateCreate(request pool.CreateRequest) error {
 	if request.Replicas < 1 || request.Replicas > 100 {
 		return errors.New("replicas must be between 1 and 100")
 	}
+	if request.Workspace.ClaimName != "" {
+		if problems := validation.IsDNS1123Subdomain(request.Workspace.ClaimName); len(problems) > 0 {
+			return errors.New("workspace.claimName must be a lowercase Kubernetes name")
+		}
+		if request.Workspace.Size != "" || request.Workspace.AccessMode != "" || request.Workspace.StorageClass != "" {
+			return errors.New("workspace.claimName cannot be combined with size, accessMode, or storageClass")
+		}
+		if request.Workspace.ReadOnly == nil {
+			return errors.New("workspace.readOnly is required with workspace.claimName")
+		}
+		return nil
+	}
+	if request.Workspace.ReadOnly != nil {
+		return errors.New("workspace.readOnly requires workspace.claimName")
+	}
 	if strings.TrimSpace(request.Workspace.Size) == "" {
 		return errors.New("workspace.size is required")
 	}
@@ -103,6 +119,8 @@ func writeManagerError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "already_exists", err.Error())
 	case errors.Is(err, pool.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", err.Error())
+	case errors.Is(err, pool.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 	}

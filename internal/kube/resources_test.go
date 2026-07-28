@@ -46,8 +46,58 @@ func TestBuildDedicatedPoolResources(t *testing.T) {
 	}
 }
 
+func TestBuildSandboxWithExistingReadOnlyClaim(t *testing.T) {
+	readOnly := true
+	request := pool.CreateRequest{
+		Name: "readers", Replicas: 2,
+		Workspace: pool.Workspace{ClaimName: "prepared-workspace", ReadOnly: &readOnly},
+	}
+	sandbox := buildSandbox(Config{Namespace: "serverless-harness", SandboxImage: "sandbox:test"}, request, 0)
+	claim, found, err := unstructuredNestedString(sandbox.Object, "spec", "podTemplate", "spec", "volumes", "0", "persistentVolumeClaim", "claimName")
+	if err != nil || !found || claim != "prepared-workspace" {
+		t.Fatalf("workspace claim = %q, found=%v, err=%v", claim, found, err)
+	}
+	volumeReadOnly, found, err := unstructuredNestedBool(sandbox.Object, "spec", "podTemplate", "spec", "volumes", "0", "persistentVolumeClaim", "readOnly")
+	if err != nil || !found || !volumeReadOnly {
+		t.Fatalf("volume readOnly = %v, found=%v, err=%v", volumeReadOnly, found, err)
+	}
+	mountReadOnly, found, err := unstructuredNestedBool(sandbox.Object, "spec", "podTemplate", "spec", "containers", "0", "volumeMounts", "0", "readOnly")
+	if err != nil || !found || !mountReadOnly {
+		t.Fatalf("mount readOnly = %v, found=%v, err=%v", mountReadOnly, found, err)
+	}
+}
+
+func TestBuildSandboxWithExistingReadWriteClaim(t *testing.T) {
+	readOnly := false
+	request := pool.CreateRequest{
+		Name: "writer", Replicas: 1,
+		Workspace: pool.Workspace{ClaimName: "prepared-workspace", ReadOnly: &readOnly},
+	}
+	sandbox := buildSandbox(Config{Namespace: "serverless-harness", SandboxImage: "sandbox:test"}, request, 0)
+	volumeReadOnly, found, err := unstructuredNestedBool(sandbox.Object, "spec", "podTemplate", "spec", "volumes", "0", "persistentVolumeClaim", "readOnly")
+	if err != nil || !found || volumeReadOnly {
+		t.Fatalf("volume readOnly = %v, found=%v, err=%v", volumeReadOnly, found, err)
+	}
+	mountReadOnly, found, err := unstructuredNestedBool(sandbox.Object, "spec", "podTemplate", "spec", "containers", "0", "volumeMounts", "0", "readOnly")
+	if err != nil || !found || mountReadOnly {
+		t.Fatalf("mount readOnly = %v, found=%v, err=%v", mountReadOnly, found, err)
+	}
+}
+
 // This tiny helper navigates maps and the single list used by the generated Sandbox.
 func unstructuredNestedString(object map[string]any, fields ...string) (string, bool, error) {
+	value, found := unstructuredNestedValue(object, fields...)
+	result, ok := value.(string)
+	return result, found && ok, nil
+}
+
+func unstructuredNestedBool(object map[string]any, fields ...string) (bool, bool, error) {
+	value, found := unstructuredNestedValue(object, fields...)
+	result, ok := value.(bool)
+	return result, found && ok, nil
+}
+
+func unstructuredNestedValue(object map[string]any, fields ...string) (any, bool) {
 	var current any = object
 	for _, field := range fields {
 		switch value := current.(type) {
@@ -55,13 +105,12 @@ func unstructuredNestedString(object map[string]any, fields ...string) (string, 
 			current = value[field]
 		case []any:
 			if field != "0" || len(value) == 0 {
-				return "", false, nil
+				return nil, false
 			}
 			current = value[0]
 		default:
-			return "", false, nil
+			return nil, false
 		}
 	}
-	result, ok := current.(string)
-	return result, ok, nil
+	return current, true
 }

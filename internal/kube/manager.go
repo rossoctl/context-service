@@ -17,12 +17,15 @@ import (
 )
 
 const (
-	poolLabel      = "context.rossoctl.io/pool"
-	managedLabel   = "app.kubernetes.io/managed-by"
-	managedBy      = "context-service"
-	replicasLabel  = "context.rossoctl.io/replicas"
-	workspaceName  = "workspace"
-	workspaceMount = "/workspace"
+	poolLabel          = "context.rossoctl.io/pool"
+	managedLabel       = "app.kubernetes.io/managed-by"
+	managedBy          = "context-service"
+	replicasLabel      = "context.rossoctl.io/replicas"
+	workspaceName      = "workspace"
+	workspaceMount     = "/workspace"
+	claimAnnotation    = "context.rossoctl.io/workspace-claim"
+	readOnlyAnnotation = "context.rossoctl.io/workspace-read-only"
+	replicasAnnotation = "context.rossoctl.io/replicas"
 )
 
 var sandboxResource = schema.GroupVersionResource{
@@ -48,8 +51,23 @@ func NewManager(config Config) (*Manager, error) {
 }
 
 func (m *Manager) Create(ctx context.Context, request pool.CreateRequest) (pool.Pool, error) {
+	if request.Workspace.ClaimName != "" {
+		pvc, err := m.core.CoreV1().PersistentVolumeClaims(m.config.Namespace).Get(ctx, request.Workspace.ClaimName, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return pool.Pool{}, fmt.Errorf("%w: workspace claim %q not found", pool.ErrInvalid, request.Workspace.ClaimName)
+		}
+		if err != nil {
+			return pool.Pool{}, fmt.Errorf("get workspace claim: %w", err)
+		}
+		if request.Replicas > 1 && !hasAccessMode(pvc, corev1.ReadWriteMany) {
+			return pool.Pool{}, fmt.Errorf("%w: workspace claim %q must support ReadWriteMany for multiple sandboxes", pool.ErrInvalid, pvc.Name)
+		}
+	}
+
 	pvcCount := request.Replicas
-	if request.Workspace.AccessMode == string(corev1.ReadWriteMany) {
+	if request.Workspace.ClaimName != "" {
+		pvcCount = 0
+	} else if request.Workspace.AccessMode == string(corev1.ReadWriteMany) {
 		pvcCount = 1
 	}
 	createdPVCs := make([]string, 0, pvcCount)
@@ -79,18 +97,50 @@ func (m *Manager) Create(ctx context.Context, request pool.CreateRequest) (pool.
 }
 
 func (m *Manager) Get(ctx context.Context, name string) (pool.Pool, error) {
+	resources := m.dynamic.Resource(sandboxResource).Namespace(m.config.Namespace)
+	sandboxes, err := resources.List(ctx, metav1.ListOptions{LabelSelector: selectorFor(name)})
+	if err != nil {
+		return pool.Pool{}, fmt.Errorf("list sandboxes: %w", err)
+	}
 	pvcs, err := m.core.CoreV1().PersistentVolumeClaims(m.config.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selectorFor(name)})
 	if err != nil {
 		return pool.Pool{}, fmt.Errorf("list workspace PVCs: %w", err)
 	}
-	if len(pvcs.Items) == 0 {
+	if len(pvcs.Items) == 0 && len(sandboxes.Items) == 0 {
 		return pool.Pool{}, pool.ErrNotFound
 	}
-	pvc := &pvcs.Items[0]
-
-	replicas, err := strconv.Atoi(pvc.Labels[replicasLabel])
+	var pvc *corev1.PersistentVolumeClaim
+	replicas := 0
+	var readOnly *bool
+	claimName := ""
+	if len(sandboxes.Items) > 0 {
+		annotations := sandboxes.Items[0].GetAnnotations()
+		claimName = annotations[claimAnnotation]
+		if claimName != "" {
+			value, _ := strconv.ParseBool(annotations[readOnlyAnnotation])
+			readOnly = &value
+		}
+		if annotations[replicasAnnotation] != "" {
+			replicas, err = strconv.Atoi(annotations[replicasAnnotation])
+		} else if len(pvcs.Items) > 0 {
+			replicas, err = strconv.Atoi(pvcs.Items[0].Labels[replicasLabel])
+		} else {
+			err = errors.New("missing replica metadata")
+		}
+		if claimName != "" {
+			pvc, err = m.core.CoreV1().PersistentVolumeClaims(m.config.Namespace).Get(ctx, claimName, metav1.GetOptions{})
+			if err != nil {
+				return pool.Pool{}, fmt.Errorf("get workspace claim: %w", err)
+			}
+		}
+	} else {
+		replicas, err = strconv.Atoi(pvcs.Items[0].Labels[replicasLabel])
+	}
 	if err != nil {
-		return pool.Pool{}, errors.New("workspace PVC has invalid replica metadata")
+		return pool.Pool{}, errors.New("sandbox pool has invalid replica metadata")
+	}
+	if pvc == nil {
+		pvc = &pvcs.Items[0]
 	}
 	selector := selectorFor(name)
 	pods, err := m.core.CoreV1().Pods(m.config.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
@@ -118,6 +168,7 @@ func (m *Manager) Get(ctx context.Context, name string) (pool.Pool, error) {
 		Workspace: pool.Workspace{
 			Size:       pvc.Spec.Resources.Requests.Storage().String(),
 			AccessMode: string(pvc.Spec.AccessModes[0]), StorageClass: storageClass,
+			ClaimName: claimName, ReadOnly: readOnly,
 		},
 	}, nil
 }
@@ -167,8 +218,25 @@ func podReady(pod corev1.Pod) bool {
 	return false
 }
 
+func hasAccessMode(pvc *corev1.PersistentVolumeClaim, mode corev1.PersistentVolumeAccessMode) bool {
+	for _, candidate := range pvc.Spec.AccessModes {
+		if candidate == mode {
+			return true
+		}
+	}
+	return false
+}
+
 func buildSandbox(config Config, request pool.CreateRequest, index int) *unstructured.Unstructured {
 	labels := map[string]any{poolLabel: request.Name, managedLabel: managedBy}
+	claimName := pvcName(request, index)
+	readOnly := request.Workspace.ReadOnly != nil && *request.Workspace.ReadOnly
+	annotations := map[string]any{
+		readOnlyAnnotation: strconv.FormatBool(readOnly), replicasAnnotation: strconv.Itoa(request.Replicas),
+	}
+	if request.Workspace.ClaimName != "" {
+		annotations[claimAnnotation] = claimName
+	}
 	podSpec := map[string]any{
 		"topologySpreadConstraints": []any{map[string]any{
 			"maxSkew": int64(1), "topologyKey": "kubernetes.io/hostname", "whenUnsatisfiable": "ScheduleAnyway",
@@ -178,7 +246,7 @@ func buildSandbox(config Config, request pool.CreateRequest, index int) *unstruc
 			"name": "sandbox", "image": config.SandboxImage,
 			"command":      []any{"/bin/sh", "-c", "mkdir -p /workspace && exec sleep infinity"},
 			"workingDir":   workspaceMount,
-			"volumeMounts": []any{map[string]any{"name": workspaceName, "mountPath": workspaceMount}},
+			"volumeMounts": []any{map[string]any{"name": workspaceName, "mountPath": workspaceMount, "readOnly": readOnly}},
 			"resources": map[string]any{
 				"requests": map[string]any{"memory": "64Mi", "cpu": "50m"},
 				"limits":   map[string]any{"memory": "256Mi"},
@@ -186,7 +254,7 @@ func buildSandbox(config Config, request pool.CreateRequest, index int) *unstruc
 		}},
 		"volumes": []any{map[string]any{
 			"name":                  workspaceName,
-			"persistentVolumeClaim": map[string]any{"claimName": pvcName(request, index)},
+			"persistentVolumeClaim": map[string]any{"claimName": claimName, "readOnly": readOnly},
 		}},
 	}
 	if config.SandboxServiceAccount != "" {
@@ -196,7 +264,7 @@ func buildSandbox(config Config, request pool.CreateRequest, index int) *unstruc
 		"apiVersion": "agents.x-k8s.io/v1beta1", "kind": "Sandbox",
 		"metadata": map[string]any{
 			"name": fmt.Sprintf("sandbox-%s-%d", request.Name, index), "namespace": config.Namespace,
-			"labels": labels,
+			"labels": labels, "annotations": annotations,
 		},
 		"spec": map[string]any{
 			"podTemplate": map[string]any{

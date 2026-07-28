@@ -52,3 +52,55 @@ func TestCreateAcceptsDedicatedRWO(t *testing.T) {
 		t.Fatalf("unexpected create request: %#v", manager.created)
 	}
 }
+
+func TestCreateAcceptsExistingReadOnlyClaim(t *testing.T) {
+	manager := &fakeManager{}
+	body := []byte(`{"name":"readers","replicas":3,"workspace":{"claimName":"prepared-workspace","readOnly":true}}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+
+	NewHandler(manager).ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if manager.created.Workspace.ClaimName != "prepared-workspace" || manager.created.Workspace.ReadOnly == nil || !*manager.created.Workspace.ReadOnly {
+		t.Fatalf("unexpected create request: %#v", manager.created)
+	}
+}
+
+func TestCreateAcceptsExistingReadWriteClaim(t *testing.T) {
+	manager := &fakeManager{}
+	body := []byte(`{"name":"writer","replicas":1,"workspace":{"claimName":"prepared-workspace","readOnly":false}}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+
+	NewHandler(manager).ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if manager.created.Workspace.ReadOnly == nil || *manager.created.Workspace.ReadOnly {
+		t.Fatalf("unexpected create request: %#v", manager.created)
+	}
+}
+
+func TestCreateRejectsClaimWithoutAccessIntent(t *testing.T) {
+	body := []byte(`{"name":"ambiguous","replicas":1,"workspace":{"claimName":"prepared-workspace"}}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+
+	NewHandler(&fakeManager{}).ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestCreateRejectsNewReadOnlyWorkspace(t *testing.T) {
+	body := []byte(`{"name":"bad","replicas":1,"workspace":{"size":"1Gi","accessMode":"ReadWriteMany","readOnly":true}}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+
+	NewHandler(&fakeManager{}).ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}

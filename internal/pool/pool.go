@@ -8,6 +8,7 @@ import (
 var (
 	ErrAlreadyExists = errors.New("sandbox pool already exists")
 	ErrNotFound      = errors.New("sandbox pool not found")
+	ErrInvalid       = errors.New("invalid sandbox pool")
 )
 
 type CreateRequest struct {
@@ -20,6 +21,8 @@ type Workspace struct {
 	Size         string `json:"size"`
 	AccessMode   string `json:"accessMode"`
 	StorageClass string `json:"storageClass,omitempty"`
+	ClaimName    string `json:"claimName,omitempty"`
+	ReadOnly     *bool  `json:"readOnly,omitempty"`
 }
 
 type Pool struct {
