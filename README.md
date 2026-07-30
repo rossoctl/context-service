@@ -25,7 +25,9 @@ Context Service currently supports:
 - An existing PVC mounted explicitly read-only or read-write
 - Claims against an existing agent-sandbox WarmPool
 
-Read the long-term [vision](VISION.md), the [core design and workflows](docs/design.md), and the
+Read the long-term [vision](VISION.md), the [core design and workflows](docs/design.md), the
+[Context Service API](docs/api.md), its [examples](docs/api-examples.md), the
+[Serverless Harness integration](docs/serverless-harness.md), and the
 [WarmPool claim design](docs/warm-pools.md).
 
 For the current development cluster, see [deploying to agentic-cloud](docs/deploy-agentic-cloud.md).
