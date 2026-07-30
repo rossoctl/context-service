@@ -104,3 +104,29 @@ func TestCreateRejectsNewReadOnlyWorkspace(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
+
+func TestCreateAcceptsWarmPoolClaims(t *testing.T) {
+	manager := &fakeManager{}
+	body := []byte(`{"name":"fast-run","replicas":3,"warmPoolRef":"research-agents","workspace":{}}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+
+	NewHandler(manager).ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if manager.created.WarmPoolRef != "research-agents" || manager.created.Replicas != 3 {
+		t.Fatalf("unexpected create request: %#v", manager.created)
+	}
+}
+
+func TestCreateRejectsWarmPoolWithWorkspace(t *testing.T) {
+	body := []byte(`{"name":"bad","replicas":1,"warmPoolRef":"research-agents","workspace":{"size":"1Gi","accessMode":"ReadWriteOnce"}}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+
+	NewHandler(&fakeManager{}).ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}

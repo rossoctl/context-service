@@ -82,6 +82,15 @@ func validateCreate(request pool.CreateRequest) error {
 	if request.Replicas < 1 || request.Replicas > 100 {
 		return errors.New("replicas must be between 1 and 100")
 	}
+	if request.WarmPoolRef != "" {
+		if problems := validation.IsDNS1123Subdomain(request.WarmPoolRef); len(problems) > 0 {
+			return errors.New("warmPoolRef must be a lowercase Kubernetes name")
+		}
+		if request.Workspace != (pool.Workspace{}) {
+			return errors.New("warmPoolRef cannot be combined with workspace settings")
+		}
+		return nil
+	}
 	if request.Workspace.ClaimName != "" {
 		if problems := validation.IsDNS1123Subdomain(request.Workspace.ClaimName); len(problems) > 0 {
 			return errors.New("workspace.claimName must be a lowercase Kubernetes name")

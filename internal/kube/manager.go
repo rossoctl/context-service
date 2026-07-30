@@ -32,6 +32,14 @@ var sandboxResource = schema.GroupVersionResource{
 	Group: "agents.x-k8s.io", Version: "v1beta1", Resource: "sandboxes",
 }
 
+var sandboxClaimResource = schema.GroupVersionResource{
+	Group: "extensions.agents.x-k8s.io", Version: "v1beta1", Resource: "sandboxclaims",
+}
+
+var sandboxWarmPoolResource = schema.GroupVersionResource{
+	Group: "extensions.agents.x-k8s.io", Version: "v1beta1", Resource: "sandboxwarmpools",
+}
+
 type Manager struct {
 	config  Config
 	core    kubernetes.Interface
@@ -51,6 +59,9 @@ func NewManager(config Config) (*Manager, error) {
 }
 
 func (m *Manager) Create(ctx context.Context, request pool.CreateRequest) (pool.Pool, error) {
+	if request.WarmPoolRef != "" {
+		return m.createClaims(ctx, request)
+	}
 	if request.Workspace.ClaimName != "" {
 		pvc, err := m.core.CoreV1().PersistentVolumeClaims(m.config.Namespace).Get(ctx, request.Workspace.ClaimName, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
@@ -97,6 +108,16 @@ func (m *Manager) Create(ctx context.Context, request pool.CreateRequest) (pool.
 }
 
 func (m *Manager) Get(ctx context.Context, name string) (pool.Pool, error) {
+	claims, err := m.dynamic.Resource(sandboxClaimResource).Namespace(m.config.Namespace).List(
+		ctx, metav1.ListOptions{LabelSelector: selectorFor(name)},
+	)
+	if err == nil && len(claims.Items) > 0 {
+		return poolFromClaims(name, claims.Items)
+	}
+	if err != nil && !apierrors.IsNotFound(err) {
+		return pool.Pool{}, fmt.Errorf("list sandbox claims: %w", err)
+	}
+
 	resources := m.dynamic.Resource(sandboxResource).Namespace(m.config.Namespace)
 	sandboxes, err := resources.List(ctx, metav1.ListOptions{LabelSelector: selectorFor(name)})
 	if err != nil {
@@ -174,6 +195,21 @@ func (m *Manager) Get(ctx context.Context, name string) (pool.Pool, error) {
 }
 
 func (m *Manager) Delete(ctx context.Context, name string) error {
+	claims := m.dynamic.Resource(sandboxClaimResource).Namespace(m.config.Namespace)
+	claimList, err := claims.List(ctx, metav1.ListOptions{LabelSelector: selectorFor(name)})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("list sandbox claims: %w", err)
+	}
+	if err == nil && len(claimList.Items) > 0 {
+		for _, claim := range claimList.Items {
+			propagation := metav1.DeletePropagationForeground
+			if err := claims.Delete(ctx, claim.GetName(), metav1.DeleteOptions{PropagationPolicy: &propagation}); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("delete sandbox claim %s: %w", claim.GetName(), err)
+			}
+		}
+		return nil
+	}
+
 	resources := m.dynamic.Resource(sandboxResource).Namespace(m.config.Namespace)
 	list, err := resources.List(ctx, metav1.ListOptions{LabelSelector: selectorFor(name)})
 	if err != nil && !apierrors.IsNotFound(err) {
@@ -197,6 +233,59 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 		}
 	}
 	return nil
+}
+
+func (m *Manager) createClaims(ctx context.Context, request pool.CreateRequest) (pool.Pool, error) {
+	warmPools := m.dynamic.Resource(sandboxWarmPoolResource).Namespace(m.config.Namespace)
+	if _, err := warmPools.Get(ctx, request.WarmPoolRef, metav1.GetOptions{}); err != nil {
+		if apierrors.IsNotFound(err) {
+			return pool.Pool{}, fmt.Errorf("%w: warm pool %q not found", pool.ErrInvalid, request.WarmPoolRef)
+		}
+		return pool.Pool{}, fmt.Errorf("get warm pool: %w", err)
+	}
+
+	claims := m.dynamic.Resource(sandboxClaimResource).Namespace(m.config.Namespace)
+	created := make([]string, 0, request.Replicas)
+	for index := 0; index < request.Replicas; index++ {
+		claim := buildSandboxClaim(m.config.Namespace, request, index)
+		if _, err := claims.Create(ctx, claim, metav1.CreateOptions{}); err != nil {
+			for _, name := range created {
+				_ = claims.Delete(ctx, name, metav1.DeleteOptions{})
+			}
+			if apierrors.IsAlreadyExists(err) {
+				return pool.Pool{}, pool.ErrAlreadyExists
+			}
+			return pool.Pool{}, fmt.Errorf("create sandbox claim %d: %w", index, err)
+		}
+		created = append(created, claim.GetName())
+	}
+	return m.Get(ctx, request.Name)
+}
+
+func poolFromClaims(name string, claims []unstructured.Unstructured) (pool.Pool, error) {
+	warmPoolRef, _, err := unstructured.NestedString(claims[0].Object, "spec", "warmPoolRef", "name")
+	if err != nil || warmPoolRef == "" {
+		return pool.Pool{}, errors.New("sandbox claim has invalid warm pool reference")
+	}
+	ready := 0
+	for _, claim := range claims {
+		conditions, _, _ := unstructured.NestedSlice(claim.Object, "status", "conditions")
+		for _, raw := range conditions {
+			condition, ok := raw.(map[string]any)
+			if ok && condition["type"] == "Ready" && condition["status"] == "True" {
+				ready++
+				break
+			}
+		}
+	}
+	status := "provisioning"
+	if ready == len(claims) {
+		status = "ready"
+	}
+	return pool.Pool{
+		Name: name, Status: status, Replicas: len(claims), ReadyReplicas: ready,
+		SandboxSelector: selectorFor(name), WarmPoolRef: warmPoolRef,
+	}, nil
 }
 
 func (m *Manager) rollback(ctx context.Context, pvcs, sandboxes []string) {
@@ -270,6 +359,23 @@ func buildSandbox(config Config, request pool.CreateRequest, index int) *unstruc
 			"podTemplate": map[string]any{
 				"metadata": map[string]any{"labels": labels},
 				"spec":     podSpec,
+			},
+		},
+	}}
+}
+
+func buildSandboxClaim(namespace string, request pool.CreateRequest, index int) *unstructured.Unstructured {
+	labels := map[string]any{poolLabel: request.Name, managedLabel: managedBy}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "extensions.agents.x-k8s.io/v1beta1", "kind": "SandboxClaim",
+		"metadata": map[string]any{
+			"name": fmt.Sprintf("claim-%s-%d", request.Name, index), "namespace": namespace,
+			"labels": labels,
+		},
+		"spec": map[string]any{
+			"warmPoolRef": map[string]any{"name": request.WarmPoolRef},
+			"additionalPodMetadata": map[string]any{
+				"labels": map[string]any{poolLabel: request.Name},
 			},
 		},
 	}}

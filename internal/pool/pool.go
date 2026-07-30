@@ -12,9 +12,10 @@ var (
 )
 
 type CreateRequest struct {
-	Name      string    `json:"name"`
-	Replicas  int       `json:"replicas"`
-	Workspace Workspace `json:"workspace"`
+	Name        string    `json:"name"`
+	Replicas    int       `json:"replicas"`
+	WarmPoolRef string    `json:"warmPoolRef,omitempty"`
+	Workspace   Workspace `json:"workspace"`
 }
 
 type Workspace struct {
@@ -31,6 +32,7 @@ type Pool struct {
 	Replicas        int       `json:"replicas"`
 	ReadyReplicas   int       `json:"readyReplicas"`
 	SandboxSelector string    `json:"sandboxSelector"`
+	WarmPoolRef     string    `json:"warmPoolRef,omitempty"`
 	Workspace       Workspace `json:"workspace"`
 }
 

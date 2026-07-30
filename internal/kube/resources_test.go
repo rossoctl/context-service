@@ -84,6 +84,22 @@ func TestBuildSandboxWithExistingReadWriteClaim(t *testing.T) {
 	}
 }
 
+func TestBuildSandboxClaim(t *testing.T) {
+	request := pool.CreateRequest{Name: "fast-run", Replicas: 3, WarmPoolRef: "research-agents"}
+	claim := buildSandboxClaim("serverless-harness", request, 2)
+	if claim.GetName() != "claim-fast-run-2" || claim.GetKind() != "SandboxClaim" {
+		t.Fatalf("unexpected claim identity: %s %s", claim.GetKind(), claim.GetName())
+	}
+	warmPool, found, err := unstructuredNestedString(claim.Object, "spec", "warmPoolRef", "name")
+	if err != nil || !found || warmPool != "research-agents" {
+		t.Fatalf("warm pool = %q, found=%v, err=%v", warmPool, found, err)
+	}
+	poolName, found, err := unstructuredNestedString(claim.Object, "spec", "additionalPodMetadata", "labels", poolLabel)
+	if err != nil || !found || poolName != "fast-run" {
+		t.Fatalf("pod pool label = %q, found=%v, err=%v", poolName, found, err)
+	}
+}
+
 // This tiny helper navigates maps and the single list used by the generated Sandbox.
 func unstructuredNestedString(object map[string]any, fields ...string) (string, bool, error) {
 	value, found := unstructuredNestedValue(object, fields...)

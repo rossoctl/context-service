@@ -91,6 +91,7 @@ func create(c *client.Client, args []string) error {
 	storageClass := flags.String("c", os.Getenv("CS_STORAGE_CLASS"), "storage class")
 	shared := flags.Bool("shared", false, "use one RWX workspace shared by two sandboxes")
 	claimName := flags.String("claim", "", "mount an existing PVC instead of creating workspace storage")
+	warmPoolRef := flags.String("warm-pool", "", "claim ready sandboxes from an existing SandboxWarmPool")
 	readOnly := flags.Bool("read-only", false, "mount the existing claim read-only")
 	readWrite := flags.Bool("read-write", false, "mount the existing claim read-write")
 	jsonOutput := flags.Bool("json", false, "print JSON")
@@ -100,7 +101,22 @@ func create(c *client.Client, args []string) error {
 		return err
 	}
 	workspace := pool.Workspace{Size: *size, AccessMode: "ReadWriteOnce", StorageClass: *storageClass}
-	if *claimName != "" {
+	if *warmPoolRef != "" {
+		incompatible := map[string]bool{
+			"shared": false, "claim": false, "read-only": false, "read-write": false, "s": false, "c": false,
+		}
+		flags.Visit(func(candidate *flag.Flag) {
+			if _, found := incompatible[candidate.Name]; found {
+				incompatible[candidate.Name] = true
+			}
+		})
+		for _, option := range []string{"shared", "claim", "read-only", "read-write", "s", "c"} {
+			if incompatible[option] {
+				return fmt.Errorf("--warm-pool cannot be combined with --%s", option)
+			}
+		}
+		workspace = pool.Workspace{}
+	} else if *claimName != "" {
 		if *readOnly == *readWrite {
 			return errors.New("--claim requires exactly one of --read-only or --read-write")
 		}
@@ -114,7 +130,7 @@ func create(c *client.Client, args []string) error {
 		}
 	}
 	result, err := c.Create(context.Background(), pool.CreateRequest{
-		Name: name, Replicas: *replicas,
+		Name: name, Replicas: *replicas, WarmPoolRef: *warmPoolRef,
 		Workspace: workspace,
 	})
 	if err != nil {
@@ -206,9 +222,16 @@ func printPool(value pool.Pool, jsonOutput bool) {
 		fmt.Println(string(encoded))
 		return
 	}
-	fmt.Printf("%s: %s (%d/%d ready), %s %s, selector %s\n",
+	fmt.Printf("%s: %s (%d/%d ready), %s, selector %s\n",
 		value.Name, value.Status, value.ReadyReplicas, value.Replicas,
-		value.Workspace.Size, shortMode(value.Workspace.AccessMode), value.SandboxSelector)
+		workspaceSummary(value), value.SandboxSelector)
+}
+
+func workspaceSummary(value pool.Pool) string {
+	if value.WarmPoolRef != "" {
+		return "warm pool " + value.WarmPoolRef
+	}
+	return fmt.Sprintf("%s %s", value.Workspace.Size, shortMode(value.Workspace.AccessMode))
 }
 
 func shortMode(mode string) string {
@@ -228,6 +251,7 @@ Create one sandbox with a 1Gi RWO workspace by default.
 
 Options:
   --shared             Create two sandboxes sharing one RWX workspace
+  --warm-pool NAME      Claim sandboxes from an existing SandboxWarmPool
   --claim NAME          Mount an existing PVC; CS will not delete it
   --read-only           Mount the existing claim read-only (requires --claim)
   --read-write          Mount the existing claim read-write (requires --claim)
@@ -240,6 +264,7 @@ Examples:
   contextctl create demo
   contextctl create demo --shared
   contextctl create demo --shared -n 3 -s 5Gi
+  contextctl create fast-run --warm-pool research-agents -n 3
   contextctl create readers --claim prepared-workspace --read-only -n 3
   contextctl create writer --claim prepared-workspace --read-write
 `)
