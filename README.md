@@ -30,8 +30,6 @@ Read the long-term [vision](VISION.md), the [core design and workflows](docs/des
 [Serverless Harness integration](docs/serverless-harness.md), and the
 [WarmPool claim design](docs/warm-pools.md).
 
-For the current development cluster, see [deploying to agentic-cloud](docs/deploy-agentic-cloud.md).
-
 Status: early prototype. The API is not stable.
 
 ## CLI
