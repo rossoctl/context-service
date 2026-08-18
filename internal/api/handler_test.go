@@ -7,11 +7,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/pool"
 )
 
 type fakeManager struct {
-	created pool.CreateRequest
+	created        pool.CreateRequest
+	createdContext contextresource.CreateRequest
 }
 
 func (f *fakeManager) Create(_ context.Context, request pool.CreateRequest) (pool.Pool, error) {
@@ -22,6 +24,69 @@ func (f *fakeManager) Get(_ context.Context, name string) (pool.Pool, error) {
 	return pool.Pool{Name: name, Status: "ready"}, nil
 }
 func (f *fakeManager) Delete(_ context.Context, _ string) error { return nil }
+func (f *fakeManager) CreateContext(_ context.Context, request contextresource.CreateRequest) (contextresource.Resource, error) {
+	f.createdContext = request
+	return contextresource.Resource{Name: request.Name, Namespace: request.Namespace, Type: request.Type, Status: "provisioning"}, nil
+}
+func (f *fakeManager) ListContexts(_ context.Context, namespace string) ([]contextresource.Resource, error) {
+	return []contextresource.Resource{{Name: "research", Namespace: namespace, Type: "workspace", Status: "ready"}}, nil
+}
+func (f *fakeManager) GetContext(_ context.Context, namespace, name string) (contextresource.Resource, error) {
+	return contextresource.Resource{Name: name, Namespace: namespace, Type: "workspace", Status: "ready"}, nil
+}
+func (f *fakeManager) DeleteContext(_ context.Context, _, _ string) error { return nil }
+
+func TestCreateWorkspaceContext(t *testing.T) {
+	manager := &fakeManager{}
+	body := []byte(`{"name":"research","namespace":"team1","type":"workspace","storage":{"backend":"pvc","size":"10Gi","accessMode":"ReadWriteMany","storageClass":"ibm-scale-csi"}}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/contexts", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+
+	NewHandler(manager).ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if manager.createdContext.Namespace != "team1" || manager.createdContext.Type != "workspace" || manager.createdContext.Storage.AccessMode != "ReadWriteMany" {
+		t.Fatalf("unexpected context request: %#v", manager.createdContext)
+	}
+}
+
+func TestCreateContextAcceptsSupportedTypes(t *testing.T) {
+	for _, contextType := range []string{"workspace", "memory", "knowledge", "artifacts"} {
+		t.Run(contextType, func(t *testing.T) {
+			manager := &fakeManager{}
+			body := []byte(`{"name":"research","namespace":"team1","type":"` + contextType + `","storage":{"backend":"pvc","size":"1Gi","accessMode":"ReadWriteOnce"}}`)
+			request := httptest.NewRequest(http.MethodPost, "/v1/contexts", bytes.NewReader(body))
+			response := httptest.NewRecorder()
+			NewHandler(manager).ServeHTTP(response, request)
+			if response.Code != http.StatusCreated {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+			if manager.createdContext.Type != contextType {
+				t.Fatalf("type = %q, want %q", manager.createdContext.Type, contextType)
+			}
+		})
+	}
+}
+
+func TestCreateContextRejectsUnknownType(t *testing.T) {
+	body := []byte(`{"name":"session","namespace":"team1","type":"session","storage":{"backend":"pvc","size":"1Gi","accessMode":"ReadWriteOnce"}}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/contexts", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	NewHandler(&fakeManager{}).ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestListContexts(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/v1/namespaces/team1/contexts", nil)
+	response := httptest.NewRecorder()
+	NewHandler(&fakeManager{}).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"name":"research"`)) {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
 
 func TestCreatePool(t *testing.T) {
 	manager := &fakeManager{}

@@ -20,6 +20,7 @@ or create Kubernetes resources directly.
 
 Context Service currently supports:
 
+- Named PVC-backed `workspace`, `memory`, `knowledge`, and `artifacts` resources
 - Dedicated RWO workspaces per sandbox
 - One shared RWX workspace across a sandbox pool
 - An existing PVC mounted explicitly read-only or read-write

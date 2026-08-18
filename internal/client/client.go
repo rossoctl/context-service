@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/pool"
 )
 
@@ -44,6 +45,28 @@ func (c *Client) Get(ctx context.Context, name string) (pool.Pool, error) {
 
 func (c *Client) Delete(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, "/v1/sandbox-pools/"+name, nil, nil)
+}
+
+func (c *Client) CreateContext(ctx context.Context, request contextresource.CreateRequest) (contextresource.Resource, error) {
+	var result contextresource.Resource
+	err := c.do(ctx, http.MethodPost, "/v1/contexts", request, &result)
+	return result, err
+}
+
+func (c *Client) ListContexts(ctx context.Context, namespace string) ([]contextresource.Resource, error) {
+	var result contextresource.List
+	err := c.do(ctx, http.MethodGet, "/v1/namespaces/"+namespace+"/contexts", nil, &result)
+	return result.Items, err
+}
+
+func (c *Client) GetContext(ctx context.Context, namespace, name string) (contextresource.Resource, error) {
+	var result contextresource.Resource
+	err := c.do(ctx, http.MethodGet, "/v1/namespaces/"+namespace+"/contexts/"+name, nil, &result)
+	return result, err
+}
+
+func (c *Client) DeleteContext(ctx context.Context, namespace, name string) error {
+	return c.do(ctx, http.MethodDelete, "/v1/namespaces/"+namespace+"/contexts/"+name, nil, nil)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, input, output any) error {
