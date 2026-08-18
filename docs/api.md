@@ -11,6 +11,10 @@ resources and returns a Kubernetes selector for routing work.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/healthz` | Service health |
+| `POST` | `/v1/contexts` | Create a named PVC-backed context resource |
+| `GET` | `/v1/namespaces/{namespace}/contexts` | List named context resources |
+| `GET` | `/v1/namespaces/{namespace}/contexts/{name}` | Read a named context resource |
+| `DELETE` | `/v1/namespaces/{namespace}/contexts/{name}` | Delete a named context resource |
 | `POST` | `/v1/sandbox-pools` | Create an allocation |
 | `GET` | `/v1/sandbox-pools/{name}` | Read allocation status |
 | `DELETE` | `/v1/sandbox-pools/{name}` | Release an allocation |
@@ -18,7 +22,52 @@ resources and returns a Kubernetes selector for routing work.
 The allocation `name` is its stable identity. Creation is rejected with `409` if owned resources
 already exist under that name.
 
-## Create request
+## Named context resources
+
+Named resources let an integration provision storage independently from sandbox capacity. The
+initial implementation supports four classifications over the same PVC-backed contract:
+`workspace`, `memory`, `knowledge`, and `artifacts`. Classification is metadata today; it does not
+yet change provisioning or lifecycle semantics.
+
+```json
+{
+  "name": "research-memory",
+  "namespace": "team1",
+  "type": "memory",
+  "storage": {
+    "backend": "pvc",
+    "size": "5Gi",
+    "accessMode": "ReadWriteMany",
+    "storageClass": "ibm-scale-csi"
+  }
+}
+```
+
+Creation returns the stable PVC attachment that a runtime can mount:
+
+```json
+{
+  "name": "research-memory",
+  "namespace": "team1",
+  "type": "memory",
+  "status": "provisioning",
+  "storage": {
+    "backend": "pvc",
+    "size": "5Gi",
+    "accessMode": "ReadWriteMany",
+    "storageClass": "ibm-scale-csi"
+  },
+  "attachment": {
+    "kind": "pvc",
+    "claimName": "context-research-memory"
+  }
+}
+```
+
+Deletion removes the managed PVC. Consumers should treat `attachment.kind` as a discriminator so
+future storage backends can use a different attachment contract.
+
+## Sandbox-pool create request
 
 ```json
 {
@@ -109,4 +158,5 @@ Successful deletion returns `204 No Content`.
 The service does not currently implement authentication. A deployment may enforce authentication
 at its ingress gateway.
 
-Artifact storage is not implemented. See the [artifact storage proposal](artifacts-proposal.md).
+Object-storage artifact backends are not implemented. The current `artifacts` context type is
+PVC-backed classification only. See the [artifact storage proposal](artifacts-proposal.md).

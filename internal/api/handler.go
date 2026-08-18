@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/pool"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -19,17 +20,112 @@ const ReadHeaderTimeout = 5 * time.Second
 var poolNamePattern = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$`)
 
 type handler struct {
-	manager pool.Manager
+	manager interface {
+		pool.Manager
+		contextresource.Manager
+	}
 }
 
-func NewHandler(manager pool.Manager) http.Handler {
+func NewHandler(manager interface {
+	pool.Manager
+	contextresource.Manager
+}) http.Handler {
 	h := &handler{manager: manager}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", h.health)
 	mux.HandleFunc("POST /v1/sandbox-pools", h.create)
 	mux.HandleFunc("GET /v1/sandbox-pools/{name}", h.get)
 	mux.HandleFunc("DELETE /v1/sandbox-pools/{name}", h.delete)
+	mux.HandleFunc("POST /v1/contexts", h.createContext)
+	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts", h.listContexts)
+	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}", h.getContext)
+	mux.HandleFunc("DELETE /v1/namespaces/{namespace}/contexts/{name}", h.deleteContext)
 	return mux
+}
+
+func (h *handler) listContexts(w http.ResponseWriter, r *http.Request) {
+	items, err := h.manager.ListContexts(r.Context(), r.PathValue("namespace"))
+	if err != nil {
+		writeContextError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, contextresource.List{Items: items})
+}
+
+func (h *handler) createContext(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	var request contextresource.CreateRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateContext(request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	created, err := h.manager.CreateContext(r.Context(), request)
+	if err != nil {
+		writeContextError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (h *handler) getContext(w http.ResponseWriter, r *http.Request) {
+	result, err := h.manager.GetContext(r.Context(), r.PathValue("namespace"), r.PathValue("name"))
+	if err != nil {
+		writeContextError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *handler) deleteContext(w http.ResponseWriter, r *http.Request) {
+	if err := h.manager.DeleteContext(r.Context(), r.PathValue("namespace"), r.PathValue("name")); err != nil {
+		writeContextError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func validateContext(request contextresource.CreateRequest) error {
+	if len(request.Name) == 0 || len(request.Name) > 50 || !poolNamePattern.MatchString(request.Name) {
+		return errors.New("name must be a lowercase Kubernetes name no longer than 50 characters")
+	}
+	if problems := validation.IsDNS1123Label(request.Namespace); len(problems) > 0 {
+		return errors.New("namespace must be a lowercase Kubernetes name")
+	}
+	switch request.Type {
+	case "workspace", "memory", "knowledge", "artifacts":
+	default:
+		return errors.New("type must be workspace, memory, knowledge, or artifacts")
+	}
+	if request.Storage.Backend != "pvc" {
+		return errors.New("storage.backend must be pvc")
+	}
+	quantity, err := resource.ParseQuantity(request.Storage.Size)
+	if err != nil || quantity.Sign() <= 0 {
+		return errors.New("storage.size must be a positive Kubernetes quantity")
+	}
+	if request.Storage.AccessMode != "ReadWriteOnce" && request.Storage.AccessMode != "ReadWriteMany" {
+		return errors.New("storage.accessMode must be ReadWriteOnce or ReadWriteMany")
+	}
+	return nil
+}
+
+func writeContextError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, contextresource.ErrAlreadyExists):
+		writeError(w, http.StatusConflict, "already_exists", err.Error())
+	case errors.Is(err, contextresource.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found", err.Error())
+	case errors.Is(err, contextresource.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+	}
 }
 
 func (h *handler) health(w http.ResponseWriter, _ *http.Request) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/pool"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -26,10 +27,91 @@ const (
 	claimAnnotation    = "context.rossoctl.io/workspace-claim"
 	readOnlyAnnotation = "context.rossoctl.io/workspace-read-only"
 	replicasAnnotation = "context.rossoctl.io/replicas"
+	contextLabel       = "context.rossoctl.io/name"
+	contextTypeLabel   = "context.rossoctl.io/type"
 )
 
 var sandboxResource = schema.GroupVersionResource{
 	Group: "agents.x-k8s.io", Version: "v1beta1", Resource: "sandboxes",
+}
+
+func (m *Manager) CreateContext(ctx context.Context, request contextresource.CreateRequest) (contextresource.Resource, error) {
+	pvc := buildContextPVC(request)
+	_, err := m.core.CoreV1().PersistentVolumeClaims(request.Namespace).Create(ctx, pvc, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		return contextresource.Resource{}, contextresource.ErrAlreadyExists
+	}
+	if err != nil {
+		return contextresource.Resource{}, fmt.Errorf("create context PVC: %w", err)
+	}
+	return m.GetContext(ctx, request.Namespace, request.Name)
+}
+
+func (m *Manager) GetContext(ctx context.Context, namespace, name string) (contextresource.Resource, error) {
+	pvc, err := m.core.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, contextPVCName(name), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return contextresource.Resource{}, contextresource.ErrNotFound
+	}
+	if err != nil {
+		return contextresource.Resource{}, fmt.Errorf("get context PVC: %w", err)
+	}
+	if pvc.Labels[managedLabel] != managedBy || pvc.Labels[contextLabel] != name {
+		return contextresource.Resource{}, contextresource.ErrNotFound
+	}
+	return resourceFromContextPVC(pvc), nil
+}
+
+func (m *Manager) ListContexts(ctx context.Context, namespace string) ([]contextresource.Resource, error) {
+	pvcs, err := m.core.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: managedLabel + "=" + managedBy,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list context PVCs: %w", err)
+	}
+	items := make([]contextresource.Resource, 0, len(pvcs.Items))
+	for index := range pvcs.Items {
+		if pvcs.Items[index].Labels[contextLabel] == "" {
+			continue
+		}
+		items = append(items, resourceFromContextPVC(&pvcs.Items[index]))
+	}
+	return items, nil
+}
+
+func resourceFromContextPVC(pvc *corev1.PersistentVolumeClaim) contextresource.Resource {
+	storageClass := ""
+	if pvc.Spec.StorageClassName != nil {
+		storageClass = *pvc.Spec.StorageClassName
+	}
+	status := "provisioning"
+	if pvc.Status.Phase == corev1.ClaimBound {
+		status = "ready"
+	}
+	return contextresource.Resource{
+		Name: pvc.Labels[contextLabel], Namespace: pvc.Namespace, Type: pvc.Labels[contextTypeLabel], Status: status,
+		Storage: contextresource.Storage{
+			Backend: "pvc", Size: pvc.Spec.Resources.Requests.Storage().String(),
+			AccessMode: string(pvc.Spec.AccessModes[0]), StorageClass: storageClass,
+		},
+		Attachment: contextresource.Attachment{Kind: "pvc", ClaimName: pvc.Name},
+	}
+}
+
+func (m *Manager) DeleteContext(ctx context.Context, namespace, name string) error {
+	pvc, err := m.core.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, contextPVCName(name), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return contextresource.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("get context PVC: %w", err)
+	}
+	if pvc.Labels[managedLabel] != managedBy || pvc.Labels[contextLabel] != name {
+		return contextresource.ErrNotFound
+	}
+	if err := m.core.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, pvc.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete context PVC: %w", err)
+	}
+	return nil
 }
 
 var sandboxClaimResource = schema.GroupVersionResource{
