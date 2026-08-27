@@ -12,6 +12,7 @@ selector for routing work.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/healthz` | Service health |
+| `GET` | `/v1/storage-classes` | List storage choices available for context resources |
 | `POST` | `/v1/contexts` | Create a named PVC-backed context resource |
 | `GET` | `/v1/namespaces/{namespace}/contexts` | List named context resources |
 | `GET` | `/v1/namespaces/{namespace}/contexts/{name}` | Read a named context resource |
@@ -22,6 +23,29 @@ selector for routing work.
 
 The allocation `name` is its stable identity. Creation is rejected with `409` if owned resources
 already exist under that name.
+
+### Storage-class discovery
+
+`GET /v1/storage-classes` returns a stable, purpose-built view of the Kubernetes
+StorageClasses that callers can select. It does not expose raw Kubernetes objects:
+
+```json
+{
+  "items": [
+    {
+      "name": "ibm-scale-csi",
+      "default": false,
+      "provisioner": "spectrumscale.csi.ibm.com",
+      "volumeBindingMode": "Immediate",
+      "reclaimPolicy": "Delete",
+      "allowVolumeExpansion": true
+    }
+  ]
+}
+```
+
+StorageClass objects do not declare supported PVC access modes, so the response
+does not claim whether a class supports `ReadWriteOnce` or `ReadWriteMany`.
 
 ## Named context resources
 

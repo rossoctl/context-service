@@ -11,6 +11,7 @@ import (
 
 	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/pool"
+	"github.com/rossoctl/context-service/internal/storageclass"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
@@ -23,12 +24,14 @@ type handler struct {
 	manager interface {
 		pool.Manager
 		contextresource.Manager
+		storageclass.Manager
 	}
 }
 
 func NewHandler(manager interface {
 	pool.Manager
 	contextresource.Manager
+	storageclass.Manager
 }) http.Handler {
 	h := &handler{manager: manager}
 	mux := http.NewServeMux()
@@ -37,10 +40,20 @@ func NewHandler(manager interface {
 	mux.HandleFunc("GET /v1/sandbox-pools/{name}", h.get)
 	mux.HandleFunc("DELETE /v1/sandbox-pools/{name}", h.delete)
 	mux.HandleFunc("POST /v1/contexts", h.createContext)
+	mux.HandleFunc("GET /v1/storage-classes", h.listStorageClasses)
 	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts", h.listContexts)
 	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}", h.getContext)
 	mux.HandleFunc("DELETE /v1/namespaces/{namespace}/contexts/{name}", h.deleteContext)
 	return mux
+}
+
+func (h *handler) listStorageClasses(w http.ResponseWriter, r *http.Request) {
+	items, err := h.manager.ListStorageClasses(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, storageclass.List{Items: items})
 }
 
 func (h *handler) listContexts(w http.ResponseWriter, r *http.Request) {
