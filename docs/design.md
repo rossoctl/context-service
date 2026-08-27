@@ -1,5 +1,10 @@
 # Context Service design
 
+Context Service is the component that provides **Agent Context Infrastructure**. Today it
+provisions, attaches, and releases storage and execution capacity. The broader capability can
+eventually process and govern the workspaces, memory, knowledge, artifacts, and runtime state used
+by agents. It is distinct from the finite context window sent to an LLM.
+
 ## Objective
 
 Context Service allocates the sandbox capacity and durable workspace required by an agent

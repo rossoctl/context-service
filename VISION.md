@@ -1,14 +1,18 @@
-# Context as a Service
+# Agent Context Infrastructure
 
 ## Vision
 
-Context is the umbrella abstraction for long-running AI agents. It includes the state needed to continue an execution, the workspace where agents do their work, durable memory carried across sessions, and knowledge synthesized from that memory.
+Agent Context Infrastructure is the layer that makes context durable, accessible, and manageable
+across agents. Here, context is the umbrella abstraction for long-running AI agents: the state
+needed to continue an execution, the workspace where agents do their work, durable memory carried
+across sessions, knowledge synthesized from that memory, and artifacts produced along the way.
 
 In short:
 
-> **Context = Execution + Workspace + Memory + Knowledge**
+> **Context = Execution + Workspace + Memory + Knowledge + Artifacts**
 
-Context Service aims to make these layers durable, accessible, and manageable across agents without requiring every agent system to build its own storage and lifecycle mechanisms.
+Context Service is the component in this repository that provides this infrastructure without
+requiring every agent system to build its own storage and lifecycle mechanisms.
 
 ## Layers of context
 
