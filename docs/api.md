@@ -2,9 +2,10 @@
 
 Status: early prototype; the API is not yet stable.
 
-Context Service accepts workload-scoped infrastructure intent rather than Kubernetes manifests. A
-client requests sandbox capacity and a workspace topology. Context Service creates or claims the
-resources and returns a Kubernetes selector for routing work.
+Context Service provides the API for Agent Context Infrastructure. It accepts workload-scoped
+infrastructure intent rather than Kubernetes manifests. A client requests sandbox capacity and a
+workspace topology. Context Service creates or claims the resources and returns a Kubernetes
+selector for routing work.
 
 ## Endpoints
 

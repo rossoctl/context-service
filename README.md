@@ -1,8 +1,12 @@
 # Context Service
 
-Context Service allocates sandbox capacity and durable workspaces for agent workloads. A caller
-describes the number of sandboxes and workspace topology it needs; Context Service creates or
-claims that capacity and returns a Kubernetes selector for routing work.
+Context Service provides **Agent Context Infrastructure**: the storage, execution capacity, and
+lifecycle needed to make durable context available to agents. Here, context means an agent's
+workspaces, memory, knowledge, artifacts, and related runtime state—not an LLM's finite context
+window.
+
+A caller describes the number of sandboxes and workspace topology it needs; Context Service
+creates or claims that capacity and returns a Kubernetes selector for routing work.
 
 ```mermaid
 flowchart LR
