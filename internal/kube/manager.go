@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 
 	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/pool"
+	"github.com/rossoctl/context-service/internal/storageclass"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -16,6 +19,40 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
+
+const (
+	defaultStorageClassAnnotation     = "storageclass.kubernetes.io/is-default-class"
+	betaDefaultStorageClassAnnotation = "storageclass.beta.kubernetes.io/is-default-class"
+)
+
+func (m *Manager) ListStorageClasses(ctx context.Context) ([]storageclass.Resource, error) {
+	classes, err := m.core.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list storage classes: %w", err)
+	}
+	items := make([]storageclass.Resource, 0, len(classes.Items))
+	for i := range classes.Items {
+		class := &classes.Items[i]
+		bindingMode := string(storagev1.VolumeBindingImmediate)
+		if class.VolumeBindingMode != nil {
+			bindingMode = string(*class.VolumeBindingMode)
+		}
+		reclaimPolicy := string(corev1.PersistentVolumeReclaimDelete)
+		if class.ReclaimPolicy != nil {
+			reclaimPolicy = string(*class.ReclaimPolicy)
+		}
+		items = append(items, storageclass.Resource{
+			Name:                 class.Name,
+			Default:              class.Annotations[defaultStorageClassAnnotation] == "true" || class.Annotations[betaDefaultStorageClassAnnotation] == "true",
+			Provisioner:          class.Provisioner,
+			VolumeBindingMode:    bindingMode,
+			ReclaimPolicy:        reclaimPolicy,
+			AllowVolumeExpansion: class.AllowVolumeExpansion != nil && *class.AllowVolumeExpansion,
+		})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	return items, nil
+}
 
 const (
 	poolLabel          = "context.rossoctl.io/pool"

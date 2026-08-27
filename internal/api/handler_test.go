@@ -9,6 +9,7 @@ import (
 
 	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/pool"
+	"github.com/rossoctl/context-service/internal/storageclass"
 )
 
 type fakeManager struct {
@@ -35,6 +36,24 @@ func (f *fakeManager) GetContext(_ context.Context, namespace, name string) (con
 	return contextresource.Resource{Name: name, Namespace: namespace, Type: "workspace", Status: "ready"}, nil
 }
 func (f *fakeManager) DeleteContext(_ context.Context, _, _ string) error { return nil }
+func (f *fakeManager) ListStorageClasses(_ context.Context) ([]storageclass.Resource, error) {
+	return []storageclass.Resource{{Name: "fast", Default: true, Provisioner: "example.csi.io", VolumeBindingMode: "WaitForFirstConsumer", ReclaimPolicy: "Delete", AllowVolumeExpansion: true}}, nil
+}
+
+func TestListStorageClasses(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/v1/storage-classes", nil)
+	response := httptest.NewRecorder()
+
+	NewHandler(&fakeManager{}).ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	for _, expected := range []string{`"name":"fast"`, `"default":true`, `"provisioner":"example.csi.io"`, `"volumeBindingMode":"WaitForFirstConsumer"`, `"allowVolumeExpansion":true`} {
+		if !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
+			t.Errorf("response missing %s: %s", expected, response.Body.String())
+		}
+	}
+}
 
 func TestCreateWorkspaceContext(t *testing.T) {
 	manager := &fakeManager{}
