@@ -65,6 +65,19 @@ bin/contextctl rm demo-pool
 Run `make kind-smoke` to test both lifecycles automatically. Remove the cluster with
 `make kind-down`. Context Service is available at `http://127.0.0.1:8080` while it is running.
 
+## Deploying to a real cluster
+
+[`deploy/context-service.yaml`](deploy/context-service.yaml) deploys Context Service to a real
+Kubernetes cluster: a `ServiceAccount` with the RBAC it needs to manage Sandboxes, SandboxClaims,
+and PVCs; a `Deployment` running the service; and a `Service` exposing it on port `8080`. Apply it
+with `kubectl apply -f deploy/context-service.yaml`, then adjust the namespace, image, and
+`CS_SANDBOX_IMAGE` for your environment.
+
+It targets plain Kubernetes and has been run there. It should work unmodified on OpenShift, with
+one likely exception: the Deployment pins `runAsUser`/`runAsGroup` to `65532`, which can conflict
+with a project's default `restricted-v2` SCC. If the Pod fails admission on OpenShift, either drop
+the fixed UID/GID and let the SCC assign one, or grant the ServiceAccount an SCC that permits it.
+
 ## CLI
 
 Build the small command-line client:
