@@ -28,7 +28,7 @@ func TestCreateFromWarmPool(t *testing.T) {
 	defer server.Close()
 
 	c := client.New(server.URL, "", server.Client())
-	if err := create(c, []string{"fast-run", "--warm-pool", "research-agents", "-n", "3"}); err != nil {
+	if err := createSandboxPool(c, []string{"fast-run", "--warm-pool", "research-agents", "--replicas", "3"}); err != nil {
 		t.Fatal(err)
 	}
 	if received.WarmPoolRef != "research-agents" || received.Replicas != 3 || received.Workspace != (pool.Workspace{}) {
@@ -78,9 +78,85 @@ func TestContextCommandRequiresSubcommand(t *testing.T) {
 
 func TestCreateFromWarmPoolRejectsWorkspaceFlags(t *testing.T) {
 	c := client.New("http://unused", "", nil)
-	err := create(c, []string{"fast-run", "--warm-pool", "research-agents", "--shared"})
+	err := createSandboxPool(c, []string{"fast-run", "--warm-pool", "research-agents", "--shared"})
 	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSharedWorkspaceDoesNotChangeReplicaCount(t *testing.T) {
+	var received pool.CreateRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(pool.Pool{
+			Name: received.Name, Status: "provisioning", Replicas: received.Replicas,
+			Workspace: received.Workspace,
+		})
+	}))
+	defer server.Close()
+
+	c := client.New(server.URL, "", server.Client())
+	if err := createSandboxPool(c, []string{"demo", "--shared"}); err != nil {
+		t.Fatal(err)
+	}
+	if received.Replicas != 1 {
+		t.Fatalf("replicas = %d, want 1", received.Replicas)
+	}
+	if received.Workspace.AccessMode != "ReadWriteMany" {
+		t.Fatalf("access mode = %q, want ReadWriteMany", received.Workspace.AccessMode)
+	}
+}
+
+func TestRunRequiresResourceFirstForSandboxPool(t *testing.T) {
+	err := run([]string{"create", "demo"})
+	if err == nil || !strings.Contains(err.Error(), "use 'contextctl sandbox-pool create'") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSandboxPoolCommandRequiresSubcommand(t *testing.T) {
+	err := sandboxPoolCommand(client.New("http://unused", "", nil), nil)
+	if err == nil || !strings.Contains(err.Error(), "sandbox-pool command is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResourceAliases(t *testing.T) {
+	tests := []struct {
+		alias string
+		want  string
+	}{
+		{alias: "sb", want: "sandbox-pool command is required"},
+		{alias: "ctx", want: "context command is required"},
+		{alias: "sc", want: "storage-class command is required"},
+	}
+	for _, test := range tests {
+		t.Run(test.alias, func(t *testing.T) {
+			err := run([]string{test.alias})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestListSandboxPools(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/sandbox-pools" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[]}`))
+	}))
+	defer server.Close()
+
+	c := client.New(server.URL, "", server.Client())
+	if err := listSandboxPools(c, nil); err != nil {
+		t.Fatal(err)
 	}
 }
 

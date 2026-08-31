@@ -29,6 +29,25 @@ func TestCreate(t *testing.T) {
 	}
 }
 
+func TestListPools(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/sandbox-pools" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[{"name":"demo","status":"ready","replicas":2,"readyReplicas":2,"sandboxSelector":"context.rossoctl.io/pool=demo","workspace":{"size":"1Gi","accessMode":"ReadWriteMany"}}]}`))
+	}))
+	defer server.Close()
+
+	result, err := New(server.URL, "", nil).List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 1 || result[0].Name != "demo" || result[0].ReadyReplicas != 2 {
+		t.Fatalf("unexpected pools: %+v", result)
+	}
+}
+
 func TestListStorageClasses(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/v1/storage-classes" {

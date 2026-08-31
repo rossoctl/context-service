@@ -21,8 +21,20 @@ func (f *fakeManager) Create(_ context.Context, request pool.CreateRequest) (poo
 	f.created = request
 	return pool.Pool{Name: request.Name, Status: "provisioning", Replicas: request.Replicas}, nil
 }
+func (f *fakeManager) List(_ context.Context) ([]pool.Pool, error) {
+	return []pool.Pool{{Name: "review", Status: "ready", Replicas: 2, ReadyReplicas: 2}}, nil
+}
 func (f *fakeManager) Get(_ context.Context, name string) (pool.Pool, error) {
 	return pool.Pool{Name: name, Status: "ready"}, nil
+}
+
+func TestListPools(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/v1/sandbox-pools", nil)
+	response := httptest.NewRecorder()
+	NewHandler(&fakeManager{}).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"name":"review"`)) {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
 }
 func (f *fakeManager) Delete(_ context.Context, _ string) error { return nil }
 func (f *fakeManager) CreateContext(_ context.Context, request contextresource.CreateRequest) (contextresource.Resource, error) {

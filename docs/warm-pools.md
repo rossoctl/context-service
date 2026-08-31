@@ -51,10 +51,10 @@ platform configuration.
 ```
 
 ```sh
-contextctl create fast-run --warm-pool research-agents -n 3
-contextctl wait fast-run
-contextctl get fast-run
-contextctl rm fast-run
+contextctl sandbox-pool create fast-run --warm-pool research-agents --replicas 3
+contextctl sandbox-pool wait fast-run
+contextctl sandbox-pool get fast-run
+contextctl sandbox-pool delete fast-run
 ```
 
 `warmPoolRef` cannot be combined with Context Service workspace settings.
