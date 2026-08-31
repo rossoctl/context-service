@@ -181,7 +181,9 @@ Successful deletion returns `204 No Content`.
 | `500` | `internal_error` | Kubernetes or service failure |
 
 The service does not currently implement authentication. A deployment may enforce authentication
-at its ingress gateway.
+at its ingress gateway. `contextctl` sends its configured token as `X-SH-Auth` (see
+[API examples](api-examples.md)), matching a Serverless Harness-style gateway convention; adjust
+the gateway or the client if your deployment expects a different header.
 
 Object-storage artifact backends are not implemented. The current `artifacts` context type is
 PVC-backed classification only. See the [artifact storage proposal](artifacts-proposal.md).
