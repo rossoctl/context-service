@@ -8,13 +8,16 @@ export CS_URL=https://example.test/context-service
 export CS_TOKEN=replace-with-gateway-token
 ```
 
-The bearer token shown here is enforced by the example ingress gateway, not Context Service.
+The token shown here is enforced by an example ingress gateway, not Context Service; the service
+itself does not implement authentication (see [API](api.md)). `contextctl` sends this token as
+`X-SH-Auth`, matching a Serverless Harness-style gateway convention. Substitute whatever header
+your own gateway expects.
 
 ## Health
 
 ```sh
 curl --fail --silent --show-error \
-  -H "Authorization: Bearer $CS_TOKEN" \
+  -H "X-SH-Auth: $CS_TOKEN" \
   "$CS_URL/healthz"
 ```
 
@@ -31,7 +34,7 @@ flowchart LR
 
 ```sh
 curl --fail --silent --show-error \
-  -H "Authorization: Bearer $CS_TOKEN" \
+  -H "X-SH-Auth: $CS_TOKEN" \
   -H "Content-Type: application/json" \
   -X POST "$CS_URL/v1/sandbox-pools" \
   -d '{
@@ -61,7 +64,7 @@ flowchart LR
 
 ```sh
 curl --fail --silent --show-error \
-  -H "Authorization: Bearer $CS_TOKEN" \
+  -H "X-SH-Auth: $CS_TOKEN" \
   -H "Content-Type: application/json" \
   -X POST "$CS_URL/v1/sandbox-pools" \
   -d '{
@@ -87,7 +90,7 @@ An existing claim requires an explicit read policy. Multiple sandboxes require t
 
 ```sh
 curl --fail --silent --show-error \
-  -H "Authorization: Bearer $CS_TOKEN" \
+  -H "X-SH-Auth: $CS_TOKEN" \
   -H "Content-Type: application/json" \
   -X POST "$CS_URL/v1/sandbox-pools" \
   -d '{
@@ -110,7 +113,7 @@ SandboxClaims; compute and storage configuration come from the template.
 
 ```sh
 curl --fail --silent --show-error \
-  -H "Authorization: Bearer $CS_TOKEN" \
+  -H "X-SH-Auth: $CS_TOKEN" \
   -H "Content-Type: application/json" \
   -X POST "$CS_URL/v1/sandbox-pools" \
   -d '{
@@ -127,7 +130,7 @@ curl --fail --silent --show-error \
 
 ```sh
 curl --fail --silent --show-error \
-  -H "Authorization: Bearer $CS_TOKEN" \
+  -H "X-SH-Auth: $CS_TOKEN" \
   "$CS_URL/v1/sandbox-pools/shared-review"
 ```
 
@@ -135,6 +138,6 @@ curl --fail --silent --show-error \
 
 ```sh
 curl --fail --silent --show-error \
-  -H "Authorization: Bearer $CS_TOKEN" \
+  -H "X-SH-Auth: $CS_TOKEN" \
   -X DELETE "$CS_URL/v1/sandbox-pools/shared-review"
 ```
