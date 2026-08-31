@@ -99,6 +99,7 @@ future storage backends can use a different attachment contract.
 {
   "name": "shared-review",
   "replicas": 3,
+  "sandboxProfile": "developer",
   "workspace": {
     "size": "5Gi",
     "accessMode": "ReadWriteMany",
@@ -114,6 +115,16 @@ Exactly one allocation strategy is selected by the request:
 - Existing PVC: `claimName` with an explicit `readOnly` value
 - Existing WarmPool: `warmPoolRef` with no workspace settings
 
+`sandboxProfile` is optional and names a platform-managed `SandboxTemplate` in the Context
+Service namespace. Context Service copies its Sandbox runtime blueprint and injects the selected
+workspace into the first container at `/workspace`. If omitted, Context Service uses its built-in
+runtime configured by `CS_SANDBOX_IMAGE`.
+
+The profile must define at least one container. It must not define `volumeClaimTemplates` or a
+volume or volume mount named `workspace`; persistent workspace storage is requested through the
+Context Service API. `sandboxProfile` cannot be combined with `warmPoolRef`; a WarmPool already
+selects its own `SandboxTemplate`.
+
 ## Sandbox-pool list response
 
 `GET /v1/sandbox-pools` returns every pool currently represented by managed Sandboxes,
@@ -128,15 +139,24 @@ SandboxClaims, or workspace PVCs:
       "replicas": 3,
       "readyReplicas": 3,
       "sandboxSelector": "context.rossoctl.io/pool=shared-review",
+      "sandboxProfile": "developer",
       "workspace": {
         "size": "5Gi",
         "accessMode": "ReadWriteMany",
         "storageClass": "ibm-scale-csi"
-      }
+      },
+      "resources": [
+        {"kind": "sandbox", "name": "sandbox-shared-review-0", "status": "Ready"},
+        {"kind": "pod", "name": "sandbox-shared-review-0", "status": "Running"},
+        {"kind": "pvc", "name": "shared-review-workspace", "status": "Bound"}
+      ]
     }
   ]
 }
 ```
+
+`resources` groups the Kubernetes objects behind each logical pool. Resource status is a snapshot;
+clients should use the pool's `status` and `readyReplicas` fields for allocation readiness.
 
 Workspace topology must be declared before sandbox creation. Kubernetes cannot add a PVC mount to
 an already-running Pod.
@@ -152,6 +172,7 @@ See [API examples](api-examples.md) for complete requests and topology diagrams.
   "replicas": 3,
   "readyReplicas": 0,
   "sandboxSelector": "context.rossoctl.io/pool=shared-review",
+  "sandboxProfile": "developer",
   "workspace": {
     "size": "5Gi",
     "accessMode": "ReadWriteMany",
@@ -186,6 +207,7 @@ Successful deletion returns `204 No Content`.
 
 - `name` must be a lowercase Kubernetes name of at most 50 characters.
 - `replicas` must be between 1 and 100.
+- `sandboxProfile`, when set, must name an existing `SandboxTemplate`.
 - Managed workspaces require a positive Kubernetes storage quantity.
 - Managed `accessMode` must be `ReadWriteOnce` or `ReadWriteMany`.
 - Unknown JSON fields are rejected.

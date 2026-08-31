@@ -8,6 +8,22 @@ Agent workload --> SH /workloads --> Context Service /v1/sandbox-pools
 Agent workload --> SH /runs      --> sandbox lease and execution
 ```
 
+An SH workload may forward an optional `sandboxProfile` name. This selects a platform-managed
+runtime without exposing arbitrary Kubernetes Pod configuration through the workload API:
+
+```json
+{
+  "name": "bugstone-review",
+  "sandboxes": 3,
+  "sandboxProfile": "bugstone-runner",
+  "workspace": {"size": "5Gi", "shared": false}
+}
+```
+
+The SH integration should pass `sandboxProfile` unchanged to Context Service. Omitting it selects
+the Context Service default runtime. Adding this field to the SH workload API is a corresponding
+change in the Serverless Harness repository.
+
 ## Identity
 
 Context Service requires an allocation `name`. SH uses the requested workload name, or generates

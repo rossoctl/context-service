@@ -201,6 +201,14 @@ func validateCreate(request pool.CreateRequest) error {
 	if request.Replicas < 1 || request.Replicas > 100 {
 		return errors.New("replicas must be between 1 and 100")
 	}
+	if request.SandboxProfile != "" {
+		if problems := validation.IsDNS1123Subdomain(request.SandboxProfile); len(problems) > 0 {
+			return errors.New("sandboxProfile must be a lowercase Kubernetes name")
+		}
+		if request.WarmPoolRef != "" {
+			return errors.New("sandboxProfile cannot be combined with warmPoolRef; the warm pool already selects a template")
+		}
+	}
 	if request.WarmPoolRef != "" {
 		if problems := validation.IsDNS1123Subdomain(request.WarmPoolRef); len(problems) > 0 {
 			return errors.New("warmPoolRef must be a lowercase Kubernetes name")

@@ -48,6 +48,26 @@ curl --fail --silent --show-error \
   }'
 ```
 
+## Sandbox runtime profile
+
+Administrators define allowed runtime settings as `SandboxTemplate` resources. Workload callers
+select one by name without sending arbitrary Pod specifications:
+
+```sh
+kubectl apply -f deploy/examples/sandbox-profile.yaml
+contextctl sb create code-review --sandbox-profile shell --replicas 3
+```
+
+Equivalent API field:
+
+```json
+"sandboxProfile": "shell"
+```
+
+The profile controls the image, command, environment, resources, and security settings. Context
+Service injects the requested workspace at `/workspace`. Omit the field to use the built-in
+runtime configured by `CS_SANDBOX_IMAGE`.
+
 ## Shared RWX workspace
 
 `ReadWriteMany` creates one managed PVC mounted by every sandbox:

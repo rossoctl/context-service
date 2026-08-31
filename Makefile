@@ -1,4 +1,4 @@
-.PHONY: build test clean kind-up kind-smoke kind-down
+.PHONY: build test clean kind-up kind-demo kind-demo-clean kind-smoke kind-down
 
 build:
 	go build -o bin/contextctl ./cmd/contextctl
@@ -12,6 +12,12 @@ clean:
 
 kind-up: build
 	./hack/kind-quickstart.sh up
+
+kind-demo: kind-up
+	./hack/kind-quickstart.sh demo
+
+kind-demo-clean: build
+	./hack/kind-quickstart.sh demo-clean
 
 kind-smoke: build
 	./hack/kind-quickstart.sh smoke

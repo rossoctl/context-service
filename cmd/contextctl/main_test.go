@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,19 @@ import (
 	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/pool"
 )
+
+func TestHelpDefinesCoreConcepts(t *testing.T) {
+	for _, expected := range []string{
+		"Context               Persistent agent data, such as a workspace, memory, or artifacts",
+		"Sandbox pool          One or more isolated agent environments with workspace context",
+		"Sandbox profile       Platform-managed runtime settings for sandbox Pods",
+		"Storage class         Kubernetes storage available to contexts and sandboxes",
+	} {
+		if !strings.Contains(help, expected) {
+			t.Errorf("help missing %q:\n%s", expected, help)
+		}
+	}
+}
 
 func TestCreateFromWarmPool(t *testing.T) {
 	var received pool.CreateRequest
@@ -33,6 +47,30 @@ func TestCreateFromWarmPool(t *testing.T) {
 	}
 	if received.WarmPoolRef != "research-agents" || received.Replicas != 3 || received.Workspace != (pool.Workspace{}) {
 		t.Fatalf("unexpected request: %+v", received)
+	}
+}
+
+func TestCreateWithSandboxProfile(t *testing.T) {
+	var received pool.CreateRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(pool.Pool{
+			Name: received.Name, Status: "provisioning", Replicas: received.Replicas,
+			SandboxProfile: received.SandboxProfile, Workspace: received.Workspace,
+		})
+	}))
+	defer server.Close()
+
+	c := client.New(server.URL, "", server.Client())
+	if err := createSandboxPool(c, []string{"developer", "--sandbox-profile", "python-tools"}); err != nil {
+		t.Fatal(err)
+	}
+	if received.SandboxProfile != "python-tools" {
+		t.Fatalf("sandbox profile = %q", received.SandboxProfile)
 	}
 }
 
@@ -157,6 +195,88 @@ func TestListSandboxPools(t *testing.T) {
 	c := client.New(server.URL, "", server.Client())
 	if err := listSandboxPools(c, nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTreeViews(t *testing.T) {
+	var output bytes.Buffer
+	writePools(&output, []pool.Pool{{
+		Name: "review", Status: "ready", Replicas: 2, ReadyReplicas: 2,
+		SandboxProfile: "developer",
+		Workspace:      pool.Workspace{Size: "1Gi", AccessMode: "ReadWriteOnce"},
+		Resources: []pool.KubernetesResource{
+			{Kind: "sandbox", Name: "sandbox-review-0", Status: "Ready"},
+			{Kind: "pod", Name: "sandbox-review-0", Status: "Running"},
+			{Kind: "pvc", Name: "review-workspace-0", Status: "Bound"},
+		},
+	}})
+	for _, expected := range []string{
+		"SANDBOX POOLS (1)",
+		"review  Ready · 2/2 · dedicated · 1Gi RWO · profile developer",
+		"└── sandbox/sandbox-review-0  Ready",
+		"    ├── pod/sandbox-review-0  Running",
+		"    └── workspace → pvc/review-workspace-0  Bound",
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("output missing %q:\n%s", expected, output.String())
+		}
+	}
+
+	output.Reset()
+	writeContexts(&output, []contextresource.Resource{{
+		Name: "demo", Type: "workspace", Status: "provisioning",
+		Storage:    contextresource.Storage{Size: "1Gi", AccessMode: "ReadWriteOnce", StorageClass: "local-path"},
+		Attachment: contextresource.Attachment{Kind: "pvc", ClaimName: "context-demo"},
+	}})
+	for _, expected := range []string{
+		"CONTEXTS (1)", "demo  Provisioning · workspace", "└── pvc/context-demo  1Gi RWO · local-path",
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("output missing %q:\n%s", expected, output.String())
+		}
+	}
+}
+
+func TestTreeViewShowsSharedWorkspaceUnderEverySandbox(t *testing.T) {
+	var output bytes.Buffer
+	writePools(&output, []pool.Pool{{
+		Name: "team", Status: "ready", Replicas: 2, ReadyReplicas: 2,
+		Workspace: pool.Workspace{Size: "1Gi", AccessMode: "ReadWriteMany"},
+		Resources: []pool.KubernetesResource{
+			{Kind: "sandbox", Name: "sandbox-team-0", Status: "Ready"},
+			{Kind: "sandbox", Name: "sandbox-team-1", Status: "Ready"},
+			{Kind: "pod", Name: "sandbox-team-0", Status: "Running"},
+			{Kind: "pod", Name: "sandbox-team-1", Status: "Running"},
+			{Kind: "pvc", Name: "team-workspace", Status: "Bound"},
+		},
+	}})
+	if count := strings.Count(output.String(), "workspace → pvc/team-workspace  Bound"); count != 2 {
+		t.Fatalf("shared PVC attachment count = %d, want 2:\n%s", count, output.String())
+	}
+}
+
+func TestLoadStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/sandbox-pools":
+			_, _ = w.Write([]byte(`{"items":[{"name":"review","status":"ready","replicas":1,"readyReplicas":1,"workspace":{"size":"1Gi","accessMode":"ReadWriteOnce"}}]}`))
+		case "/v1/namespaces/team1/contexts":
+			_, _ = w.Write([]byte(`{"items":[{"name":"demo","namespace":"team1","type":"workspace","status":"ready","storage":{"backend":"pvc","size":"1Gi","accessMode":"ReadWriteOnce"},"attachment":{"kind":"pvc","claimName":"context-demo"}}]}`))
+		case "/v1/storage-classes":
+			_, _ = w.Write([]byte(`{"items":[{"name":"standard","default":true}]}`))
+		default:
+			t.Fatalf("unexpected request: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	view, err := loadStatus(client.New(server.URL, "", server.Client()), "team1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Namespace != "team1" || len(view.SandboxPools) != 1 || len(view.Contexts) != 1 || len(view.StorageClasses) != 1 {
+		t.Fatalf("unexpected status: %+v", view)
 	}
 }
 
