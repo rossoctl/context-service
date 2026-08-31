@@ -226,6 +226,66 @@ func (m *Manager) Create(ctx context.Context, request pool.CreateRequest) (pool.
 	return m.Get(ctx, request.Name)
 }
 
+func (m *Manager) List(ctx context.Context) ([]pool.Pool, error) {
+	names := map[string]struct{}{}
+	collect := func(labels map[string]string) {
+		if name := labels[poolLabel]; name != "" {
+			names[name] = struct{}{}
+		}
+	}
+
+	claims, err := m.dynamic.Resource(sandboxClaimResource).Namespace(m.config.Namespace).List(
+		ctx, metav1.ListOptions{LabelSelector: managedLabel + "=" + managedBy},
+	)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("list sandbox claims: %w", err)
+	}
+	if err == nil {
+		for _, claim := range claims.Items {
+			collect(claim.GetLabels())
+		}
+	}
+
+	sandboxes, err := m.dynamic.Resource(sandboxResource).Namespace(m.config.Namespace).List(
+		ctx, metav1.ListOptions{LabelSelector: managedLabel + "=" + managedBy},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list sandboxes: %w", err)
+	}
+	for _, sandbox := range sandboxes.Items {
+		collect(sandbox.GetLabels())
+	}
+
+	pvcs, err := m.core.CoreV1().PersistentVolumeClaims(m.config.Namespace).List(
+		ctx, metav1.ListOptions{LabelSelector: managedLabel + "=" + managedBy},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace PVCs: %w", err)
+	}
+	for _, pvc := range pvcs.Items {
+		collect(pvc.Labels)
+	}
+
+	orderedNames := make([]string, 0, len(names))
+	for name := range names {
+		orderedNames = append(orderedNames, name)
+	}
+	sort.Strings(orderedNames)
+
+	items := make([]pool.Pool, 0, len(orderedNames))
+	for _, name := range orderedNames {
+		item, err := m.Get(ctx, name)
+		if errors.Is(err, pool.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get sandbox pool %s: %w", name, err)
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
 func (m *Manager) Get(ctx context.Context, name string) (pool.Pool, error) {
 	claims, err := m.dynamic.Resource(sandboxClaimResource).Namespace(m.config.Namespace).List(
 		ctx, metav1.ListOptions{LabelSelector: selectorFor(name)},

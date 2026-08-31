@@ -126,6 +126,14 @@ curl --fail --silent --show-error \
 
 `warmPoolRef` cannot be combined with workspace settings.
 
+## List pools
+
+```sh
+curl --fail --silent --show-error \
+  -H "X-SH-Auth: $CS_TOKEN" \
+  "$CS_URL/v1/sandbox-pools"
+```
+
 ## Read status
 
 ```sh

@@ -139,7 +139,7 @@ smoke() {
   fi
 
   cleanup_smoke() {
-    CS_URL="$endpoint" "$ROOT_DIR/bin/contextctl" rm "$pool_name" >/dev/null 2>&1 || true
+    CS_URL="$endpoint" "$ROOT_DIR/bin/contextctl" sandbox-pool delete "$pool_name" >/dev/null 2>&1 || true
     kubectl_kind -n "$NAMESPACE" delete pod "$consumer_name" --ignore-not-found --wait=false >/dev/null 2>&1 || true
     curl --silent --show-error --connect-timeout 2 --max-time 10 --request DELETE \
       "$endpoint/v1/namespaces/$NAMESPACE/contexts/$context_name" >/dev/null 2>&1 || true
@@ -192,11 +192,11 @@ EOF
   kubectl_kind -n "$NAMESPACE" wait --for=delete "pvc/context-$context_name" --timeout=2m
 
   CS_URL="$endpoint" CS_STORAGE_CLASS=local-path \
-    "$ROOT_DIR/bin/contextctl" create "$pool_name"
-  CS_URL="$endpoint" "$ROOT_DIR/bin/contextctl" wait "$pool_name" -t 2m
+    "$ROOT_DIR/bin/contextctl" sandbox-pool create "$pool_name"
+  CS_URL="$endpoint" "$ROOT_DIR/bin/contextctl" sandbox-pool wait "$pool_name" --timeout 2m
   kubectl_kind -n "$NAMESPACE" get sandboxes,pvc \
     -l "context.rossoctl.io/pool=$pool_name"
-  CS_URL="$endpoint" "$ROOT_DIR/bin/contextctl" rm "$pool_name" >/dev/null
+  CS_URL="$endpoint" "$ROOT_DIR/bin/contextctl" sandbox-pool delete "$pool_name" >/dev/null
   trap - EXIT
 
   echo "Smoke test passed: context storage and sandbox pool lifecycles are working"

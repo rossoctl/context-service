@@ -41,6 +41,13 @@ func TestManagerCreatesGetsAndDeletesWarmPoolClaims(t *testing.T) {
 	if created.WarmPoolRef != "research-agents" || created.Replicas != 3 || created.ReadyReplicas != 0 {
 		t.Fatalf("unexpected pool: %+v", created)
 	}
+	listed, err := manager.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].Name != "fast-run" || listed[0].WarmPoolRef != "research-agents" {
+		t.Fatalf("unexpected listed pools: %+v", listed)
+	}
 	claims, err := dynamicClient.Resource(sandboxClaimResource).Namespace("serverless-harness").List(
 		context.Background(), metav1.ListOptions{LabelSelector: selectorFor("fast-run")},
 	)

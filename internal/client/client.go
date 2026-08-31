@@ -45,6 +45,12 @@ func (c *Client) Create(ctx context.Context, request pool.CreateRequest) (pool.P
 	return result, err
 }
 
+func (c *Client) List(ctx context.Context) ([]pool.Pool, error) {
+	var result pool.List
+	err := c.do(ctx, http.MethodGet, "/v1/sandbox-pools", nil, &result)
+	return result.Items, err
+}
+
 func (c *Client) Get(ctx context.Context, name string) (pool.Pool, error) {
 	var result pool.Pool
 	err := c.do(ctx, http.MethodGet, "/v1/sandbox-pools/"+name, nil, &result)

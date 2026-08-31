@@ -25,19 +25,16 @@ Usage:
 
 Commands:
   health                Check the service
-  storage-classes       List available Kubernetes storage classes
-  context COMMAND       Create, list, show, or delete named contexts
-  create NAME           Create a pool
-  get NAME              Show a pool
-  wait NAME             Wait until a pool is ready
-  rm NAME               Delete a pool (alias: delete)
+  storage-class COMMAND Discover Kubernetes storage classes (alias: sc)
+  context COMMAND       Create, list, show, or delete named contexts (alias: ctx)
+  sandbox-pool COMMAND  Create, list, show, wait for, or delete sandbox pools (alias: sb)
   help [command]        Show help
 
 Quick start:
-  contextctl create demo --shared
-  contextctl wait demo
-  contextctl get demo
-  contextctl rm demo
+  contextctl sandbox-pool create demo --replicas 2 --shared
+  contextctl sandbox-pool wait demo
+  contextctl sandbox-pool get demo
+  contextctl sandbox-pool delete demo
 
 Environment:
   CS_URL                 Service URL (default http://localhost:8080)
@@ -76,39 +73,96 @@ func run(args []string) error {
 		}
 		fmt.Println("ok")
 		return nil
+	case "storage-class", "sc":
+		return storageClassCommand(c, args[1:])
 	case "storage-classes":
-		return listStorageClasses(c, args[1:])
-	case "context":
+		return errors.New("storage-classes moved; use 'contextctl storage-class list'")
+	case "context", "ctx":
 		return contextCommand(c, args[1:])
-	case "create":
-		return create(c, args[1:])
-	case "get":
-		return get(c, args[1:])
-	case "wait":
-		return wait(c, args[1:])
-	case "rm", "delete":
-		return remove(c, args[1:])
+	case "sandbox-pool", "sb":
+		return sandboxPoolCommand(c, args[1:])
+	case "create", "get", "wait", "rm", "delete":
+		return fmt.Errorf("%q requires a resource; use 'contextctl sandbox-pool %s'", args[0], args[0])
 	default:
 		return fmt.Errorf("unknown command %q; run 'contextctl help'", args[0])
 	}
 }
 
+func storageClassCommand(c *client.Client, args []string) error {
+	if len(args) == 0 {
+		showHelp([]string{"storage-class"})
+		return errors.New("a storage-class command is required")
+	}
+	switch args[0] {
+	case "help", "-h", "--help":
+		showHelp([]string{"storage-class"})
+		return nil
+	case "list":
+		return listStorageClasses(c, args[1:])
+	default:
+		return fmt.Errorf("unknown storage-class command %q; run 'contextctl help storage-class'", args[0])
+	}
+}
+
 func listStorageClasses(c *client.Client, args []string) error {
-	flags := flag.NewFlagSet("storage-classes", flag.ContinueOnError)
+	flags := flag.NewFlagSet("storage-class list", flag.ContinueOnError)
 	jsonOutput := flags.Bool("json", false, "print JSON")
-	flags.Usage = func() { showHelp([]string{"storage-classes"}) }
+	flags.Usage = func() { showHelp([]string{"storage-class", "list"}) }
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		flags.Usage()
-		return errors.New("storage-classes does not accept arguments")
+		return errors.New("storage-class list does not accept arguments")
 	}
 	items, err := c.ListStorageClasses(context.Background())
 	if err != nil {
 		return err
 	}
 	printStorageClasses(items, *jsonOutput)
+	return nil
+}
+
+func sandboxPoolCommand(c *client.Client, args []string) error {
+	if len(args) == 0 {
+		showHelp([]string{"sandbox-pool"})
+		return errors.New("a sandbox-pool command is required")
+	}
+	switch args[0] {
+	case "help", "-h", "--help":
+		showHelp([]string{"sandbox-pool"})
+		return nil
+	case "create":
+		return createSandboxPool(c, args[1:])
+	case "list":
+		return listSandboxPools(c, args[1:])
+	case "get":
+		return getSandboxPool(c, args[1:])
+	case "wait":
+		return waitForSandboxPool(c, args[1:])
+	case "delete", "rm":
+		return deleteSandboxPool(c, args[1:])
+	default:
+		return fmt.Errorf("unknown sandbox-pool command %q; run 'contextctl help sandbox-pool'", args[0])
+	}
+}
+
+func listSandboxPools(c *client.Client, args []string) error {
+	flags := flag.NewFlagSet("sandbox-pool list", flag.ContinueOnError)
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	flags.Usage = func() { showHelp([]string{"sandbox-pool", "list"}) }
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		flags.Usage()
+		return errors.New("sandbox-pool list does not accept arguments")
+	}
+	items, err := c.List(context.Background())
+	if err != nil {
+		return err
+	}
+	printPools(items, *jsonOutput)
 	return nil
 }
 
@@ -127,7 +181,7 @@ func contextCommand(c *client.Client, args []string) error {
 		return listContexts(c, args[1:])
 	case "get":
 		return getContext(c, args[1:])
-	case "rm", "delete":
+	case "delete", "rm":
 		return removeContext(c, args[1:])
 	default:
 		return fmt.Errorf("unknown context command %q; run 'contextctl help context'", args[0])
@@ -198,9 +252,9 @@ func getContext(c *client.Client, args []string) error {
 }
 
 func removeContext(c *client.Client, args []string) error {
-	flags := flag.NewFlagSet("context rm", flag.ContinueOnError)
+	flags := flag.NewFlagSet("context delete", flag.ContinueOnError)
 	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
-	flags.Usage = func() { showHelp([]string{"context", "rm"}) }
+	flags.Usage = func() { showHelp([]string{"context", "delete"}) }
 	name, err := parseContextName(flags, args)
 	if err != nil {
 		return err
@@ -212,34 +266,41 @@ func removeContext(c *client.Client, args []string) error {
 	return nil
 }
 
-func create(c *client.Client, args []string) error {
-	flags := flag.NewFlagSet("create", flag.ContinueOnError)
+func createSandboxPool(c *client.Client, args []string) error {
+	flags := flag.NewFlagSet("sandbox-pool create", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	replicas := flags.Int("n", 1, "number of sandboxes")
-	size := flags.String("s", "1Gi", "workspace size")
-	storageClass := flags.String("c", os.Getenv("CS_STORAGE_CLASS"), "storage class")
-	shared := flags.Bool("shared", false, "use one RWX workspace shared by two sandboxes")
+	replicas := 1
+	flags.IntVar(&replicas, "replicas", 1, "number of sandboxes")
+	flags.IntVar(&replicas, "n", 1, "number of sandboxes (shorthand)")
+	size := "1Gi"
+	flags.StringVar(&size, "workspace-size", "1Gi", "workspace size")
+	flags.StringVar(&size, "s", "1Gi", "workspace size (shorthand)")
+	storageClass := os.Getenv("CS_STORAGE_CLASS")
+	flags.StringVar(&storageClass, "storage-class", storageClass, "storage class")
+	flags.StringVar(&storageClass, "c", storageClass, "storage class (shorthand)")
+	shared := flags.Bool("shared", false, "use one RWX workspace shared by all sandboxes")
 	claimName := flags.String("claim", "", "mount an existing PVC instead of creating workspace storage")
 	warmPoolRef := flags.String("warm-pool", "", "claim ready sandboxes from an existing SandboxWarmPool")
 	readOnly := flags.Bool("read-only", false, "mount the existing claim read-only")
 	readWrite := flags.Bool("read-write", false, "mount the existing claim read-write")
 	jsonOutput := flags.Bool("json", false, "print JSON")
-	flags.Usage = func() { showHelp([]string{"create"}) }
+	flags.Usage = func() { showHelp([]string{"sandbox-pool", "create"}) }
 	name, err := parseName(flags, args)
 	if err != nil {
 		return err
 	}
-	workspace := pool.Workspace{Size: *size, AccessMode: "ReadWriteOnce", StorageClass: *storageClass}
+	workspace := pool.Workspace{Size: size, AccessMode: "ReadWriteOnce", StorageClass: storageClass}
 	if *warmPoolRef != "" {
 		incompatible := map[string]bool{
-			"shared": false, "claim": false, "read-only": false, "read-write": false, "s": false, "c": false,
+			"shared": false, "claim": false, "read-only": false, "read-write": false,
+			"workspace-size": false, "s": false, "storage-class": false, "c": false,
 		}
 		flags.Visit(func(candidate *flag.Flag) {
 			if _, found := incompatible[candidate.Name]; found {
 				incompatible[candidate.Name] = true
 			}
 		})
-		for _, option := range []string{"shared", "claim", "read-only", "read-write", "s", "c"} {
+		for _, option := range []string{"shared", "claim", "read-only", "read-write", "workspace-size", "s", "storage-class", "c"} {
 			if incompatible[option] {
 				return fmt.Errorf("--warm-pool cannot be combined with --%s", option)
 			}
@@ -254,12 +315,9 @@ func create(c *client.Client, args []string) error {
 		return errors.New("--read-only and --read-write require --claim")
 	} else if *shared {
 		workspace.AccessMode = "ReadWriteMany"
-		if *replicas == 1 {
-			*replicas = 2
-		}
 	}
 	result, err := c.Create(context.Background(), pool.CreateRequest{
-		Name: name, Replicas: *replicas, WarmPoolRef: *warmPoolRef,
+		Name: name, Replicas: replicas, WarmPoolRef: *warmPoolRef,
 		Workspace: workspace,
 	})
 	if err != nil {
@@ -269,10 +327,10 @@ func create(c *client.Client, args []string) error {
 	return nil
 }
 
-func get(c *client.Client, args []string) error {
-	flags := flag.NewFlagSet("get", flag.ContinueOnError)
+func getSandboxPool(c *client.Client, args []string) error {
+	flags := flag.NewFlagSet("sandbox-pool get", flag.ContinueOnError)
 	jsonOutput := flags.Bool("json", false, "print JSON")
-	flags.Usage = func() { showHelp([]string{"get"}) }
+	flags.Usage = func() { showHelp([]string{"sandbox-pool", "get"}) }
 	name, err := parseName(flags, args)
 	if err != nil {
 		return err
@@ -285,15 +343,17 @@ func get(c *client.Client, args []string) error {
 	return nil
 }
 
-func wait(c *client.Client, args []string) error {
-	flags := flag.NewFlagSet("wait", flag.ContinueOnError)
-	timeout := flags.Duration("t", 2*time.Minute, "maximum wait time")
-	flags.Usage = func() { showHelp([]string{"wait"}) }
+func waitForSandboxPool(c *client.Client, args []string) error {
+	flags := flag.NewFlagSet("sandbox-pool wait", flag.ContinueOnError)
+	timeout := 2 * time.Minute
+	flags.DurationVar(&timeout, "timeout", timeout, "maximum wait time")
+	flags.DurationVar(&timeout, "t", timeout, "maximum wait time (shorthand)")
+	flags.Usage = func() { showHelp([]string{"sandbox-pool", "wait"}) }
 	name, err := parseName(flags, args)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -314,9 +374,9 @@ func wait(c *client.Client, args []string) error {
 	}
 }
 
-func remove(c *client.Client, args []string) error {
-	flags := flag.NewFlagSet("rm", flag.ContinueOnError)
-	flags.Usage = func() { showHelp([]string{"rm"}) }
+func deleteSandboxPool(c *client.Client, args []string) error {
+	flags := flag.NewFlagSet("sandbox-pool delete", flag.ContinueOnError)
+	flags.Usage = func() { showHelp([]string{"sandbox-pool", "delete"}) }
 	name, err := parseName(flags, args)
 	if err != nil {
 		return err
@@ -330,8 +390,8 @@ func remove(c *client.Client, args []string) error {
 
 func parseName(flags *flag.FlagSet, args []string) (string, error) {
 	// The standard flag package stops at the first positional argument. Move a
-	// leading name to the end so both "create demo --shared" and
-	// "create --shared demo" work as users expect.
+	// leading name to the end so both "sandbox-pool create demo --shared" and
+	// "sandbox-pool create --shared demo" work as users expect.
 	if len(args) > 1 && !strings.HasPrefix(args[0], "-") {
 		args = append(append([]string{}, args[1:]...), args[0])
 	}
@@ -368,6 +428,25 @@ func printPool(value pool.Pool, jsonOutput bool) {
 	fmt.Printf("%s: %s (%d/%d ready), %s, selector %s\n",
 		value.Name, value.Status, value.ReadyReplicas, value.Replicas,
 		workspaceSummary(value), value.SandboxSelector)
+}
+
+func printPools(items []pool.Pool, jsonOutput bool) {
+	if jsonOutput {
+		encoded, _ := json.MarshalIndent(items, "", "  ")
+		fmt.Println(string(encoded))
+		return
+	}
+	if len(items) == 0 {
+		fmt.Println("No sandbox pools found.")
+		return
+	}
+	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(writer, "NAME\tSTATUS\tREADY\tWORKSPACE\tSELECTOR")
+	for _, item := range items {
+		fmt.Fprintf(writer, "%s\t%s\t%d/%d\t%s\t%s\n", item.Name, item.Status,
+			item.ReadyReplicas, item.Replicas, workspaceSummary(item), item.SandboxSelector)
+	}
+	_ = writer.Flush()
 }
 
 func printStorageClasses(items []storageclass.Resource, jsonOutput bool) {
@@ -458,17 +537,34 @@ func showHelp(args []string) {
 		return
 	}
 	switch args[0] {
-	case "storage-classes":
-		fmt.Print("Usage: contextctl storage-classes [--json]\n")
-	case "context":
+	case "storage-class", "sc":
+		if len(args) == 1 {
+			fmt.Print(`Usage: contextctl storage-class COMMAND [options]
+
+Alias: contextctl sc
+
+Commands:
+  list                 List available Kubernetes storage classes
+`)
+			return
+		}
+		switch args[1] {
+		case "list":
+			fmt.Print("Usage: contextctl storage-class list [--json]\n")
+		default:
+			fmt.Printf("Unknown storage-class command %q.\n", args[1])
+		}
+	case "context", "ctx":
 		if len(args) == 1 {
 			fmt.Print(`Usage: contextctl context COMMAND [options]
+
+Alias: contextctl ctx
 
 Commands:
   create NAME          Create a named context
   list                 List named contexts
   get NAME             Show a named context
-  rm NAME              Delete a named context (alias: delete)
+  delete NAME          Delete a named context (alias: rm)
 
 Run "contextctl help context COMMAND" for command options.
 `)
@@ -490,41 +586,64 @@ Options:
 			fmt.Print("Usage: contextctl context list [--namespace NAME] [--json]\n")
 		case "get":
 			fmt.Print("Usage: contextctl context get NAME [--namespace NAME] [--json]\n")
-		case "rm", "delete":
-			fmt.Print("Usage: contextctl context rm NAME [--namespace NAME]\n")
+		case "delete", "rm":
+			fmt.Print("Usage: contextctl context delete NAME [--namespace NAME]\n")
 		default:
 			fmt.Printf("Unknown context command %q.\n", args[1])
 		}
-	case "create":
-		fmt.Print(`Usage: contextctl create NAME [options]
+	case "sandbox-pool", "sb":
+		if len(args) == 1 {
+			fmt.Print(`Usage: contextctl sandbox-pool COMMAND [options]
+
+Alias: contextctl sb
+
+Commands:
+  create NAME          Create a sandbox pool
+  list                 List sandbox pools
+  get NAME             Show a sandbox pool
+  wait NAME            Wait until every sandbox is ready
+  delete NAME          Delete a sandbox pool (alias: rm)
+
+Run "contextctl help sandbox-pool COMMAND" for command options.
+`)
+			return
+		}
+		switch args[1] {
+		case "create":
+			fmt.Print(`Usage: contextctl sandbox-pool create NAME [options]
 
 Create one sandbox with a 1Gi RWO workspace by default.
 
 Options:
-  --shared             Create two sandboxes sharing one RWX workspace
+  --shared             Use one RWX workspace shared by all sandboxes
   --warm-pool NAME      Claim sandboxes from an existing SandboxWarmPool
   --claim NAME          Mount an existing PVC; CS will not delete it
   --read-only           Mount the existing claim read-only (requires --claim)
   --read-write          Mount the existing claim read-write (requires --claim)
-  -n NUMBER            Number of sandboxes (default 1, or 2 with --shared)
-  -s SIZE              Workspace size (default 1Gi)
-  -c STORAGE_CLASS     Storage class (default CS_STORAGE_CLASS)
+  --replicas NUMBER     Number of sandboxes (default 1; shorthand: -n)
+  --workspace-size SIZE Workspace size (default 1Gi; shorthand: -s)
+  --storage-class NAME  Storage class (default CS_STORAGE_CLASS; shorthand: -c)
   --json               Print JSON
 
 Examples:
-  contextctl create demo
-  contextctl create demo --shared
-  contextctl create demo --shared -n 3 -s 5Gi
-  contextctl create fast-run --warm-pool research-agents -n 3
-  contextctl create readers --claim prepared-workspace --read-only -n 3
-  contextctl create writer --claim prepared-workspace --read-write
+  contextctl sandbox-pool create demo
+  contextctl sandbox-pool create demo --shared --replicas 2
+  contextctl sandbox-pool create review --shared --replicas 3 --workspace-size 5Gi
+  contextctl sandbox-pool create fast-run --warm-pool research-agents --replicas 3
+  contextctl sandbox-pool create readers --claim prepared-workspace --read-only --replicas 3
+  contextctl sandbox-pool create writer --claim prepared-workspace --read-write
 `)
-	case "get":
-		fmt.Print("Usage: contextctl get NAME [--json]\n")
-	case "wait":
-		fmt.Print("Usage: contextctl wait NAME [-t 2m]\n\nWait until every sandbox is ready.\n")
-	case "rm", "delete":
-		fmt.Print("Usage: contextctl rm NAME\n\nDelete the pool's sandboxes and workspace.\n")
+		case "list":
+			fmt.Print("Usage: contextctl sandbox-pool list [--json]\n")
+		case "get":
+			fmt.Print("Usage: contextctl sandbox-pool get NAME [--json]\n")
+		case "wait":
+			fmt.Print("Usage: contextctl sandbox-pool wait NAME [--timeout 2m]\n\nWait until every sandbox is ready.\n")
+		case "delete", "rm":
+			fmt.Print("Usage: contextctl sandbox-pool delete NAME\n\nDelete the pool's sandboxes and managed workspace.\n")
+		default:
+			fmt.Printf("Unknown sandbox-pool command %q.\n", args[1])
+		}
 	case "health":
 		fmt.Print("Usage: contextctl health\n")
 	default:

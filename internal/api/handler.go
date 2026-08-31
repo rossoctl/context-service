@@ -37,6 +37,7 @@ func NewHandler(manager interface {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", h.health)
 	mux.HandleFunc("POST /v1/sandbox-pools", h.create)
+	mux.HandleFunc("GET /v1/sandbox-pools", h.list)
 	mux.HandleFunc("GET /v1/sandbox-pools/{name}", h.get)
 	mux.HandleFunc("DELETE /v1/sandbox-pools/{name}", h.delete)
 	mux.HandleFunc("POST /v1/contexts", h.createContext)
@@ -45,6 +46,15 @@ func NewHandler(manager interface {
 	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}", h.getContext)
 	mux.HandleFunc("DELETE /v1/namespaces/{namespace}/contexts/{name}", h.deleteContext)
 	return mux
+}
+
+func (h *handler) list(w http.ResponseWriter, r *http.Request) {
+	items, err := h.manager.List(r.Context())
+	if err != nil {
+		writeManagerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pool.List{Items: items})
 }
 
 func (h *handler) listStorageClasses(w http.ResponseWriter, r *http.Request) {

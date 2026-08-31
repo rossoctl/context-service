@@ -18,6 +18,7 @@ selector for routing work.
 | `GET` | `/v1/namespaces/{namespace}/contexts/{name}` | Read a named context resource |
 | `DELETE` | `/v1/namespaces/{namespace}/contexts/{name}` | Delete a named context resource |
 | `POST` | `/v1/sandbox-pools` | Create an allocation |
+| `GET` | `/v1/sandbox-pools` | List allocations |
 | `GET` | `/v1/sandbox-pools/{name}` | Read allocation status |
 | `DELETE` | `/v1/sandbox-pools/{name}` | Release an allocation |
 
@@ -112,6 +113,30 @@ Exactly one allocation strategy is selected by the request:
 - Managed `ReadWriteMany` workspace: one shared PVC
 - Existing PVC: `claimName` with an explicit `readOnly` value
 - Existing WarmPool: `warmPoolRef` with no workspace settings
+
+## Sandbox-pool list response
+
+`GET /v1/sandbox-pools` returns every pool currently represented by managed Sandboxes,
+SandboxClaims, or workspace PVCs:
+
+```json
+{
+  "items": [
+    {
+      "name": "shared-review",
+      "status": "ready",
+      "replicas": 3,
+      "readyReplicas": 3,
+      "sandboxSelector": "context.rossoctl.io/pool=shared-review",
+      "workspace": {
+        "size": "5Gi",
+        "accessMode": "ReadWriteMany",
+        "storageClass": "ibm-scale-csi"
+      }
+    }
+  ]
+}
+```
 
 Workspace topology must be declared before sandbox creation. Kubernetes cannot add a PVC mount to
 an already-running Pod.

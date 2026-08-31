@@ -41,42 +41,74 @@ Status: early prototype. The API is not stable.
 
 With Docker, Kind, `kubectl`, `curl`, and Go installed:
 
+### Build `contextctl`
+
+```sh
+make build
+export PATH="$PWD/bin:$PATH"
+```
+
+### Start Context Service
+
 ```sh
 make kind-up
-bin/contextctl storage-classes
-bin/contextctl context create demo --storage-class local-path
-bin/contextctl context list
-bin/contextctl context get demo
-kubectl --context kind-context-service -n serverless-harness get pvc context-demo
-bin/contextctl context rm demo
+export CS_STORAGE_CLASS=local-path
+
+contextctl sc list
 ```
 
-The context initially waits for a consumer because Kind's local-path provisioner binds storage when
-a pod mounts it. To create a sandbox pool and inspect the Kubernetes resources behind it:
+### Create a Context
 
 ```sh
-CS_STORAGE_CLASS=local-path bin/contextctl create demo-pool
-bin/contextctl wait demo-pool
-kubectl --context kind-context-service -n serverless-harness get sandboxes,pvc \
-  -l context.rossoctl.io/pool=demo-pool
-bin/contextctl rm demo-pool
+contextctl ctx create demo
+contextctl ctx list
 ```
 
-Run `make kind-smoke` to test both lifecycles automatically. Remove the cluster with
-`make kind-down`. Context Service is available at `http://127.0.0.1:8080` while it is running.
+A new Context may show `provisioning` until a workload mounts it.
 
-## Deploying to a real cluster
+### Create a Sandbox Pool
 
-[`deploy/context-service.yaml`](deploy/context-service.yaml) deploys Context Service to a real
-Kubernetes cluster: a `ServiceAccount` with the RBAC it needs to manage Sandboxes, SandboxClaims,
-and PVCs; a `Deployment` running the service; and a `Service` exposing it on port `8080`. Apply it
-with `kubectl apply -f deploy/context-service.yaml`, then adjust the namespace, image, and
-`CS_SANDBOX_IMAGE` for your environment.
+```sh
+contextctl sb create demo-pool
+contextctl sb wait demo-pool
+contextctl sb list
+```
 
-It targets plain Kubernetes and has been run there. It should work unmodified on OpenShift, with
-one likely exception: the Deployment pins `runAsUser`/`runAsGroup` to `65532`, which can conflict
-with a project's default `restricted-v2` SCC. If the Pod fails admission on OpenShift, either drop
-the fixed UID/GID and let the SCC assign one, or grant the ServiceAccount an SCC that permits it.
+### See what was created
+
+Show Context Service resources alongside their Sandboxes, PVCs, and Pods:
+
+```sh
+./hack/context-service-status.sh
+
+# Refresh continuously
+watch ./hack/context-service-status.sh
+```
+
+### Clean up
+
+```sh
+contextctl sb delete demo-pool
+contextctl ctx delete demo
+make kind-down
+```
+
+Context Service runs at `http://127.0.0.1:8080`. Run `make kind-smoke` to test both lifecycles
+automatically. The status script runs once and supports `CS_URL`, `CS_NAMESPACE`, `KUBE_CONTEXT`,
+and `CONTEXTCTL` overrides.
+
+## Deploy to Kubernetes
+
+```sh
+kubectl apply -f deploy/context-service.yaml
+kubectl -n serverless-harness rollout status deployment/context-service
+```
+
+Before production, update the namespace, Context Service image, and `CS_SANDBOX_IMAGE` in
+[`deploy/context-service.yaml`](deploy/context-service.yaml).
+
+**OpenShift:** If `restricted-v2` rejects UID `65532`, remove `runAsUser` and `runAsGroup` from the
+Deployment so OpenShift can assign them.
 
 ## CLI
 
@@ -84,7 +116,11 @@ Build the small command-line client:
 
 ```sh
 make build
+export PATH="$PWD/bin:$PATH"
 ```
+
+The resource aliases `ctx`, `sb`, and `sc` are available for interactive use. For example,
+`contextctl sb list` is equivalent to `contextctl sandbox-pool list`.
 
 Copy and edit the example configuration, then load it into your shell:
 
@@ -109,17 +145,18 @@ flowchart LR
 ```
 
 ```sh
-bin/contextctl create demo
-bin/contextctl wait demo
-bin/contextctl get demo
-bin/contextctl rm demo
+contextctl sandbox-pool create demo
+contextctl sandbox-pool list
+contextctl sandbox-pool wait demo
+contextctl sandbox-pool get demo
+contextctl sandbox-pool delete demo
 ```
 
-Use `-n` to create multiple sandboxes. Each sandbox receives a separate RWO PVC. Deleting the pool
-also deletes its managed PVCs.
+Use `--replicas` to create multiple sandboxes. Each sandbox receives a separate RWO PVC. Deleting
+the pool also deletes its managed PVCs.
 
 ```sh
-bin/contextctl create review -n 3
+contextctl sandbox-pool create review --replicas 3
 ```
 
 ### Shared workspace
@@ -135,16 +172,17 @@ flowchart LR
 ```
 
 ```sh
-bin/contextctl create demo --shared
-bin/contextctl wait demo
-bin/contextctl get demo
-bin/contextctl rm demo
+contextctl sandbox-pool create demo --shared --replicas 2
+contextctl sandbox-pool wait demo
+contextctl sandbox-pool get demo
+contextctl sandbox-pool delete demo
 ```
 
 Override the sandbox count, workspace size, or storage class as needed:
 
 ```sh
-bin/contextctl create review --shared -n 3 -s 5Gi -c ibm-scale-csi
+contextctl sandbox-pool create review --shared --replicas 3 \
+  --workspace-size 5Gi --storage-class ibm-scale-csi
 ```
 
 Deleting the pool also deletes its managed shared PVC.
@@ -162,15 +200,15 @@ flowchart LR
 ```
 
 ```sh
-bin/contextctl create readers --claim prepared-workspace --read-only -n 3
-bin/contextctl wait readers
-bin/contextctl rm readers
+contextctl sandbox-pool create readers --claim prepared-workspace --read-only --replicas 3
+contextctl sandbox-pool wait readers
+contextctl sandbox-pool delete readers
 ```
 
 Attach it read-write instead:
 
 ```sh
-bin/contextctl create writer --claim prepared-workspace --read-write
+contextctl sandbox-pool create writer --claim prepared-workspace --read-write
 ```
 
 `--claim` requires exactly one of `--read-only` or `--read-write`. Deleting either pool removes its sandboxes but does not delete the externally owned PVC.
@@ -189,9 +227,9 @@ flowchart LR
 ```
 
 ```sh
-bin/contextctl create fast-run --warm-pool research-agents -n 3
-bin/contextctl wait fast-run
-bin/contextctl rm fast-run
+contextctl sandbox-pool create fast-run --warm-pool research-agents --replicas 3
+contextctl sandbox-pool wait fast-run
+contextctl sandbox-pool delete fast-run
 ```
 
 WarmPool claims use the image, environment, and storage already configured by the pool's
@@ -199,4 +237,5 @@ WarmPool claims use the image, environment, and storage already configured by th
 controller manages the claimed Sandboxes and replenishes the WarmPool. `--warm-pool` cannot be
 combined with Context Service workspace options.
 
-Run `bin/contextctl help` or `bin/contextctl help create` for defaults, options, and examples.
+Run `contextctl help` or `contextctl help sandbox-pool create` for defaults, options, and
+examples.

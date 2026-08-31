@@ -36,8 +36,13 @@ type Pool struct {
 	Workspace       Workspace `json:"workspace"`
 }
 
+type List struct {
+	Items []Pool `json:"items"`
+}
+
 type Manager interface {
 	Create(context.Context, CreateRequest) (Pool, error)
+	List(context.Context) ([]Pool, error)
 	Get(context.Context, string) (Pool, error)
 	Delete(context.Context, string) error
 }
