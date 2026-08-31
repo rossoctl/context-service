@@ -37,6 +37,34 @@ Read the long-term [vision](VISION.md), the [core design and workflows](docs/des
 
 Status: early prototype. The API is not stable.
 
+## Quick start with Kind
+
+With Docker, Kind, `kubectl`, `curl`, and Go installed:
+
+```sh
+make kind-up
+bin/contextctl storage-classes
+bin/contextctl context create demo --storage-class local-path
+bin/contextctl context list
+bin/contextctl context get demo
+kubectl --context kind-context-service -n serverless-harness get pvc context-demo
+bin/contextctl context rm demo
+```
+
+The context initially waits for a consumer because Kind's local-path provisioner binds storage when
+a pod mounts it. To create a sandbox pool and inspect the Kubernetes resources behind it:
+
+```sh
+CS_STORAGE_CLASS=local-path bin/contextctl create demo-pool
+bin/contextctl wait demo-pool
+kubectl --context kind-context-service -n serverless-harness get sandboxes,pvc \
+  -l context.rossoctl.io/pool=demo-pool
+bin/contextctl rm demo-pool
+```
+
+Run `make kind-smoke` to test both lifecycles automatically. Remove the cluster with
+`make kind-down`. Context Service is available at `http://127.0.0.1:8080` while it is running.
+
 ## CLI
 
 Build the small command-line client:

@@ -9,19 +9,24 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/rossoctl/context-service/internal/client"
+	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/pool"
+	"github.com/rossoctl/context-service/internal/storageclass"
 )
 
-const help = `contextctl manages Context Service sandbox pools.
+const help = `contextctl manages Context Service resources.
 
 Usage:
   contextctl <command> [options]
 
 Commands:
   health                Check the service
+  storage-classes       List available Kubernetes storage classes
+  context COMMAND       Create, list, show, or delete named contexts
   create NAME           Create a pool
   get NAME              Show a pool
   wait NAME             Wait until a pool is ready
@@ -37,6 +42,7 @@ Quick start:
 Environment:
   CS_URL                 Service URL (default http://localhost:8080)
   CS_TOKEN               Gateway token for public access
+  CS_NAMESPACE           Default context namespace (default serverless-harness)
   CS_STORAGE_CLASS       Default storage class for create
 
 Run "contextctl help <command>" for command options and examples.
@@ -70,6 +76,10 @@ func run(args []string) error {
 		}
 		fmt.Println("ok")
 		return nil
+	case "storage-classes":
+		return listStorageClasses(c, args[1:])
+	case "context":
+		return contextCommand(c, args[1:])
 	case "create":
 		return create(c, args[1:])
 	case "get":
@@ -81,6 +91,125 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q; run 'contextctl help'", args[0])
 	}
+}
+
+func listStorageClasses(c *client.Client, args []string) error {
+	flags := flag.NewFlagSet("storage-classes", flag.ContinueOnError)
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	flags.Usage = func() { showHelp([]string{"storage-classes"}) }
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		flags.Usage()
+		return errors.New("storage-classes does not accept arguments")
+	}
+	items, err := c.ListStorageClasses(context.Background())
+	if err != nil {
+		return err
+	}
+	printStorageClasses(items, *jsonOutput)
+	return nil
+}
+
+func contextCommand(c *client.Client, args []string) error {
+	if len(args) == 0 {
+		showHelp([]string{"context"})
+		return errors.New("a context command is required")
+	}
+	switch args[0] {
+	case "help", "-h", "--help":
+		showHelp([]string{"context"})
+		return nil
+	case "create":
+		return createContext(c, args[1:])
+	case "list":
+		return listContexts(c, args[1:])
+	case "get":
+		return getContext(c, args[1:])
+	case "rm", "delete":
+		return removeContext(c, args[1:])
+	default:
+		return fmt.Errorf("unknown context command %q; run 'contextctl help context'", args[0])
+	}
+}
+
+func createContext(c *client.Client, args []string) error {
+	flags := flag.NewFlagSet("context create", flag.ContinueOnError)
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	contextType := flags.String("type", "workspace", "context type")
+	size := flags.String("size", "1Gi", "storage size")
+	storageClass := flags.String("storage-class", os.Getenv("CS_STORAGE_CLASS"), "storage class")
+	accessMode := flags.String("access-mode", "ReadWriteOnce", "storage access mode")
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	flags.Usage = func() { showHelp([]string{"context", "create"}) }
+	name, err := parseContextName(flags, args)
+	if err != nil {
+		return err
+	}
+	result, err := c.CreateContext(context.Background(), contextresource.CreateRequest{
+		Name: name, Namespace: *namespace, Type: *contextType,
+		Storage: contextresource.Storage{
+			Backend: "pvc", Size: *size, AccessMode: *accessMode, StorageClass: *storageClass,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	printContext(result, *jsonOutput)
+	return nil
+}
+
+func listContexts(c *client.Client, args []string) error {
+	flags := flag.NewFlagSet("context list", flag.ContinueOnError)
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	flags.Usage = func() { showHelp([]string{"context", "list"}) }
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		flags.Usage()
+		return errors.New("context list does not accept arguments")
+	}
+	items, err := c.ListContexts(context.Background(), *namespace)
+	if err != nil {
+		return err
+	}
+	printContexts(items, *jsonOutput)
+	return nil
+}
+
+func getContext(c *client.Client, args []string) error {
+	flags := flag.NewFlagSet("context get", flag.ContinueOnError)
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	flags.Usage = func() { showHelp([]string{"context", "get"}) }
+	name, err := parseContextName(flags, args)
+	if err != nil {
+		return err
+	}
+	result, err := c.GetContext(context.Background(), *namespace, name)
+	if err != nil {
+		return err
+	}
+	printContext(result, *jsonOutput)
+	return nil
+}
+
+func removeContext(c *client.Client, args []string) error {
+	flags := flag.NewFlagSet("context rm", flag.ContinueOnError)
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	flags.Usage = func() { showHelp([]string{"context", "rm"}) }
+	name, err := parseContextName(flags, args)
+	if err != nil {
+		return err
+	}
+	if err := c.DeleteContext(context.Background(), *namespace, name); err != nil {
+		return err
+	}
+	fmt.Println("deleted", name)
+	return nil
 }
 
 func create(c *client.Client, args []string) error {
@@ -216,6 +345,20 @@ func parseName(flags *flag.FlagSet, args []string) (string, error) {
 	return flags.Arg(0), nil
 }
 
+func parseContextName(flags *flag.FlagSet, args []string) (string, error) {
+	if len(args) > 1 && !strings.HasPrefix(args[0], "-") {
+		args = append(append([]string{}, args[1:]...), args[0])
+	}
+	if err := flags.Parse(args); err != nil {
+		return "", err
+	}
+	if flags.NArg() != 1 {
+		flags.Usage()
+		return "", errors.New("exactly one context name is required")
+	}
+	return flags.Arg(0), nil
+}
+
 func printPool(value pool.Pool, jsonOutput bool) {
 	if jsonOutput {
 		encoded, _ := json.MarshalIndent(value, "", "  ")
@@ -225,6 +368,77 @@ func printPool(value pool.Pool, jsonOutput bool) {
 	fmt.Printf("%s: %s (%d/%d ready), %s, selector %s\n",
 		value.Name, value.Status, value.ReadyReplicas, value.Replicas,
 		workspaceSummary(value), value.SandboxSelector)
+}
+
+func printStorageClasses(items []storageclass.Resource, jsonOutput bool) {
+	if jsonOutput {
+		encoded, _ := json.MarshalIndent(items, "", "  ")
+		fmt.Println(string(encoded))
+		return
+	}
+	if len(items) == 0 {
+		fmt.Println("No storage classes found.")
+		return
+	}
+	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(writer, "NAME\tDEFAULT\tPROVISIONER\tBINDING MODE\tEXPANSION")
+	for _, item := range items {
+		fmt.Fprintf(writer, "%s\t%t\t%s\t%s\t%t\n", item.Name, item.Default,
+			item.Provisioner, item.VolumeBindingMode, item.AllowVolumeExpansion)
+	}
+	_ = writer.Flush()
+}
+
+func printContexts(items []contextresource.Resource, jsonOutput bool) {
+	if jsonOutput {
+		encoded, _ := json.MarshalIndent(items, "", "  ")
+		fmt.Println(string(encoded))
+		return
+	}
+	if len(items) == 0 {
+		fmt.Println("No contexts found.")
+		return
+	}
+	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(writer, "NAME\tNAMESPACE\tTYPE\tSTATUS\tSTORAGE\tKUBERNETES RESOURCE")
+	for _, item := range items {
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s %s (%s)\t%s/%s\n", item.Name, item.Namespace,
+			item.Type, item.Status, item.Storage.Size, item.Storage.AccessMode,
+			storageClassName(item.Storage.StorageClass), strings.ToLower(item.Attachment.Kind),
+			item.Attachment.ClaimName)
+	}
+	_ = writer.Flush()
+}
+
+func printContext(value contextresource.Resource, jsonOutput bool) {
+	if jsonOutput {
+		encoded, _ := json.MarshalIndent(value, "", "  ")
+		fmt.Println(string(encoded))
+		return
+	}
+	fmt.Printf(`Context
+  Name:               %s
+  Namespace:          %s
+  Type:               %s
+  Status:             %s
+  Storage:            %s %s
+  Storage class:      %s
+  Kubernetes resource: %s/%s
+`, value.Name, value.Namespace, value.Type, value.Status, value.Storage.Size,
+		value.Storage.AccessMode, storageClassName(value.Storage.StorageClass),
+		strings.ToLower(value.Attachment.Kind), value.Attachment.ClaimName)
+	if value.Status == "provisioning" {
+		fmt.Printf("\nInspect: kubectl -n %s get %s %s\n", value.Namespace,
+			strings.ToLower(value.Attachment.Kind), value.Attachment.ClaimName)
+		fmt.Println("Hint: a WaitForFirstConsumer storage class binds the PVC after a workload mounts it.")
+	}
+}
+
+func storageClassName(name string) string {
+	if name == "" {
+		return "<default>"
+	}
+	return name
 }
 
 func workspaceSummary(value pool.Pool) string {
@@ -244,6 +458,43 @@ func showHelp(args []string) {
 		return
 	}
 	switch args[0] {
+	case "storage-classes":
+		fmt.Print("Usage: contextctl storage-classes [--json]\n")
+	case "context":
+		if len(args) == 1 {
+			fmt.Print(`Usage: contextctl context COMMAND [options]
+
+Commands:
+  create NAME          Create a named context
+  list                 List named contexts
+  get NAME             Show a named context
+  rm NAME              Delete a named context (alias: delete)
+
+Run "contextctl help context COMMAND" for command options.
+`)
+			return
+		}
+		switch args[1] {
+		case "create":
+			fmt.Print(`Usage: contextctl context create NAME [options]
+
+Options:
+  --namespace NAME      Kubernetes namespace (default CS_NAMESPACE or serverless-harness)
+  --type TYPE           Context type (default workspace)
+  --size SIZE           Storage size (default 1Gi)
+  --storage-class NAME  Kubernetes storage class (default CS_STORAGE_CLASS)
+  --access-mode MODE    ReadWriteOnce or ReadWriteMany (default ReadWriteOnce)
+  --json                Print JSON
+`)
+		case "list":
+			fmt.Print("Usage: contextctl context list [--namespace NAME] [--json]\n")
+		case "get":
+			fmt.Print("Usage: contextctl context get NAME [--namespace NAME] [--json]\n")
+		case "rm", "delete":
+			fmt.Print("Usage: contextctl context rm NAME [--namespace NAME]\n")
+		default:
+			fmt.Printf("Unknown context command %q.\n", args[1])
+		}
 	case "create":
 		fmt.Print(`Usage: contextctl create NAME [options]
 
