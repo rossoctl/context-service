@@ -13,13 +13,16 @@ readonly NAMESPACE="serverless-harness"
 readonly LOCAL_PATH_VERSION="v0.0.37"
 readonly LOCAL_PATH_MANIFEST="https://raw.githubusercontent.com/rancher/local-path-provisioner/${LOCAL_PATH_VERSION}/deploy/local-path-storage.yaml"
 readonly AGENT_SANDBOX_VERSION="v1.0.0"
-readonly AGENT_SANDBOX_MANIFEST="https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/sandbox.yaml"
+readonly AGENT_SANDBOX_MANIFEST="https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/sandbox-with-extensions.yaml"
 
 usage() {
   cat <<'EOF'
-Usage: hack/kind-quickstart.sh [up|smoke|down]
+Usage: hack/kind-quickstart.sh [up|demo|demo-clean|smoke|down]
 
   up      Create or reuse a Kind cluster and deploy Context Service.
+  demo    Create example contexts and sandbox pools, then show their status.
+  demo-clean
+          Delete the example resources but keep the Kind cluster.
   smoke   Verify storage discovery and a complete context PVC lifecycle.
   down    Delete the quickstart Kind cluster.
 
@@ -103,6 +106,7 @@ up() {
   kind load docker-image --name "$CLUSTER_NAME" "$IMAGE"
 
   kubectl_kind apply -f "$ROOT_DIR/deploy/kind/namespace.yaml"
+  kubectl_kind apply -f "$ROOT_DIR/deploy/examples/sandbox-profile.yaml"
   kubectl_kind apply -f "$ROOT_DIR/deploy/context-service.yaml"
   kubectl_kind -n "$NAMESPACE" set image deployment/context-service \
     context-service="$IMAGE"
@@ -114,6 +118,111 @@ up() {
   wait_for_http "http://127.0.0.1:${HOST_PORT}/healthz" >/dev/null
 
   echo "Context Service is ready at http://127.0.0.1:${HOST_PORT}"
+}
+
+contextctl_demo() {
+  CS_URL="http://127.0.0.1:${HOST_PORT}" CS_STORAGE_CLASS=local-path \
+    "$ROOT_DIR/bin/contextctl" "$@"
+}
+
+demo_exists() {
+  contextctl_demo "$1" get "$2" >/dev/null 2>&1
+}
+
+create_demo_context() {
+  local name="$1"
+  local type="$2"
+  local size="$3"
+
+  if demo_exists ctx "$name"; then
+    echo "Reusing context $name"
+    return
+  fi
+  contextctl_demo ctx create "$name" --type "$type" --size "$size" >/dev/null
+}
+
+create_demo_pool() {
+  local name="$1"
+  shift
+
+  if demo_exists sb "$name"; then
+    echo "Reusing sandbox pool $name"
+    return
+  fi
+  contextctl_demo sb create "$name" "$@" >/dev/null
+}
+
+demo_clean() {
+  require kubectl
+  require curl
+  if [[ ! -x "$ROOT_DIR/bin/contextctl" ]]; then
+    echo "bin/contextctl is missing; run 'make build' first" >&2
+    exit 1
+  fi
+
+  wait_for_http "http://127.0.0.1:${HOST_PORT}/healthz" >/dev/null
+  for pool_name in demo-solo demo-team; do
+    contextctl_demo sb delete "$pool_name" >/dev/null 2>&1 || true
+  done
+  kubectl_kind -n "$NAMESPACE" delete pod demo-agent --ignore-not-found --wait=true >/dev/null
+  for context_name in demo-workspace demo-memory demo-artifacts; do
+    contextctl_demo ctx delete "$context_name" >/dev/null 2>&1 || true
+  done
+  echo "Demo resources deleted"
+}
+
+demo() {
+  require kubectl
+  require curl
+  if [[ ! -x "$ROOT_DIR/bin/contextctl" ]]; then
+    echo "bin/contextctl is missing; run 'make build' first" >&2
+    exit 1
+  fi
+
+  wait_for_http "http://127.0.0.1:${HOST_PORT}/healthz" >/dev/null
+
+  echo "Creating example contexts..."
+  create_demo_context demo-workspace workspace 1Gi
+  create_demo_context demo-memory memory 256Mi
+  create_demo_context demo-artifacts artifacts 512Mi
+
+  kubectl_kind -n "$NAMESPACE" apply -f - >/dev/null <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: demo-agent
+  labels:
+    app.kubernetes.io/name: context-service-demo
+spec:
+  restartPolicy: Never
+  containers:
+    - name: agent
+      image: busybox:1.36
+      command: ["sh", "-c", "sleep infinity"]
+      volumeMounts:
+        - {name: workspace, mountPath: /workspace}
+        - {name: memory, mountPath: /memory}
+        - {name: artifacts, mountPath: /artifacts}
+  volumes:
+    - name: workspace
+      persistentVolumeClaim: {claimName: context-demo-workspace}
+    - name: memory
+      persistentVolumeClaim: {claimName: context-demo-memory}
+    - name: artifacts
+      persistentVolumeClaim: {claimName: context-demo-artifacts}
+EOF
+  kubectl_kind -n "$NAMESPACE" wait --for=condition=Ready pod/demo-agent --timeout=2m >/dev/null
+
+  echo "Creating example sandbox pools..."
+  create_demo_pool demo-solo --sandbox-profile shell --workspace-size 1Gi
+  create_demo_pool demo-team --sandbox-profile shell --replicas 2 --workspace-size 1Gi
+  contextctl_demo sb wait demo-solo --timeout 2m >/dev/null
+  contextctl_demo sb wait demo-team --timeout 2m >/dev/null
+
+  contextctl_demo status
+  echo
+  echo "Explore with: contextctl status"
+  echo "Clean up with: make kind-demo-clean"
 }
 
 smoke() {
@@ -209,6 +318,8 @@ down() {
 
 case "${1:-up}" in
   up) up ;;
+  demo) demo ;;
+  demo-clean) demo_clean ;;
   smoke) smoke ;;
   down) down ;;
   -h|--help|help) usage ;;

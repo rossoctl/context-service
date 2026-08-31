@@ -12,10 +12,11 @@ var (
 )
 
 type CreateRequest struct {
-	Name        string    `json:"name"`
-	Replicas    int       `json:"replicas"`
-	WarmPoolRef string    `json:"warmPoolRef,omitempty"`
-	Workspace   Workspace `json:"workspace"`
+	Name           string    `json:"name"`
+	Replicas       int       `json:"replicas"`
+	SandboxProfile string    `json:"sandboxProfile,omitempty"`
+	WarmPoolRef    string    `json:"warmPoolRef,omitempty"`
+	Workspace      Workspace `json:"workspace"`
 }
 
 type Workspace struct {
@@ -27,13 +28,21 @@ type Workspace struct {
 }
 
 type Pool struct {
-	Name            string    `json:"name"`
-	Status          string    `json:"status"`
-	Replicas        int       `json:"replicas"`
-	ReadyReplicas   int       `json:"readyReplicas"`
-	SandboxSelector string    `json:"sandboxSelector"`
-	WarmPoolRef     string    `json:"warmPoolRef,omitempty"`
-	Workspace       Workspace `json:"workspace"`
+	Name            string               `json:"name"`
+	Status          string               `json:"status"`
+	Replicas        int                  `json:"replicas"`
+	ReadyReplicas   int                  `json:"readyReplicas"`
+	SandboxSelector string               `json:"sandboxSelector"`
+	SandboxProfile  string               `json:"sandboxProfile,omitempty"`
+	WarmPoolRef     string               `json:"warmPoolRef,omitempty"`
+	Workspace       Workspace            `json:"workspace"`
+	Resources       []KubernetesResource `json:"resources,omitempty"`
+}
+
+type KubernetesResource struct {
+	Kind   string `json:"kind"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
 }
 
 type List struct {

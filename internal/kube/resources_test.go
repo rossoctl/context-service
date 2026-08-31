@@ -65,6 +65,68 @@ func TestBuildDedicatedPoolResources(t *testing.T) {
 	}
 }
 
+func TestBuildSandboxWithProfile(t *testing.T) {
+	request := pool.CreateRequest{
+		Name: "review", Replicas: 1, SandboxProfile: "developer",
+		Workspace: pool.Workspace{Size: "1Gi", AccessMode: "ReadWriteOnce"},
+	}
+	profile := map[string]any{
+		"podTemplate": map[string]any{
+			"spec": map[string]any{
+				"securityContext": map[string]any{"runAsNonRoot": true},
+				"containers": []any{map[string]any{
+					"name": "agent", "image": "example/developer:latest",
+				}},
+			},
+		},
+	}
+	sandbox, err := buildSandboxWithProfile(Config{Namespace: "serverless-harness"}, request, 0, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, found, err := unstructuredNestedString(sandbox.Object, "spec", "podTemplate", "spec", "containers", "0", "image")
+	if err != nil || !found || image != "example/developer:latest" {
+		t.Fatalf("image = %q, found=%v, err=%v", image, found, err)
+	}
+	claim, found, err := unstructuredNestedString(sandbox.Object, "spec", "podTemplate", "spec", "volumes", "0", "persistentVolumeClaim", "claimName")
+	if err != nil || !found || claim != "review-workspace-0" {
+		t.Fatalf("workspace claim = %q, found=%v, err=%v", claim, found, err)
+	}
+	if sandbox.GetAnnotations()[profileAnnotation] != "developer" {
+		t.Fatalf("profile annotation = %q", sandbox.GetAnnotations()[profileAnnotation])
+	}
+}
+
+func TestBuildSandboxProfileRejectsReservedWorkspaceVolume(t *testing.T) {
+	request := pool.CreateRequest{
+		Name: "review", Replicas: 1, SandboxProfile: "bad",
+		Workspace: pool.Workspace{Size: "1Gi", AccessMode: "ReadWriteOnce"},
+	}
+	profile := map[string]any{"podTemplate": map[string]any{"spec": map[string]any{
+		"containers": []any{map[string]any{"name": "agent", "image": "busybox"}},
+		"volumes":    []any{map[string]any{"name": workspaceName}},
+	}}}
+	if _, err := buildSandboxWithProfile(Config{Namespace: "serverless-harness"}, request, 0, profile); err == nil {
+		t.Fatal("expected reserved workspace volume error")
+	}
+}
+
+func TestBuildSandboxProfileRejectsStorageTemplates(t *testing.T) {
+	request := pool.CreateRequest{
+		Name: "review", Replicas: 1, SandboxProfile: "bad",
+		Workspace: pool.Workspace{Size: "1Gi", AccessMode: "ReadWriteOnce"},
+	}
+	profile := map[string]any{
+		"podTemplate": map[string]any{"spec": map[string]any{
+			"containers": []any{map[string]any{"name": "agent", "image": "busybox"}},
+		}},
+		"volumeClaimTemplates": []any{map[string]any{"metadata": map[string]any{"name": "cache"}}},
+	}
+	if _, err := buildSandboxWithProfile(Config{Namespace: "serverless-harness"}, request, 0, profile); err == nil {
+		t.Fatal("expected volumeClaimTemplates error")
+	}
+}
+
 func TestBuildSandboxWithExistingReadOnlyClaim(t *testing.T) {
 	readOnly := true
 	request := pool.CreateRequest{

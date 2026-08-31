@@ -59,7 +59,7 @@ Ownership is deliberately split:
 
 | Layer | Responsibility |
 |---|---|
-| Context Service | Workload-scoped allocation, workspace topology, selector, and release |
+| Context Service | Workload-scoped allocation, runtime-profile selection, workspace topology, selector, and release |
 | agent-sandbox | Sandbox-to-Pod lifecycle and WarmPool reconciliation |
 | Kubernetes and CSI | PVC provisioning, attachment, and mount enforcement |
 | Serverless Harness | Workload-facing API, Redis leases, sandbox selection, and execution |
@@ -75,6 +75,12 @@ Every allocation has:
 - Exactly one allocation strategy.
 - A selector applied to the resulting Sandbox Pods.
 - A lifecycle ending when the caller releases the allocation.
+
+Direct allocations may also select a platform-managed sandbox profile. A profile is an upstream
+`SandboxTemplate` containing the runtime blueprint—image, command, environment, resources, and
+security settings. Context Service copies that blueprint and injects the allocation's workspace;
+it does not accept arbitrary Pod specifications from workload callers. Without a profile, the
+built-in `CS_SANDBOX_IMAGE` runtime remains the default.
 
 The response reports provisioning status, desired and ready capacity, and the selector. Callers
 wait for `ready` before dispatching work.

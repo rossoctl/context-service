@@ -64,6 +64,7 @@ const (
 	claimAnnotation    = "context.rossoctl.io/workspace-claim"
 	readOnlyAnnotation = "context.rossoctl.io/workspace-read-only"
 	replicasAnnotation = "context.rossoctl.io/replicas"
+	profileAnnotation  = "context.rossoctl.io/sandbox-profile"
 	contextLabel       = "context.rossoctl.io/name"
 	contextTypeLabel   = "context.rossoctl.io/type"
 )
@@ -159,6 +160,10 @@ var sandboxWarmPoolResource = schema.GroupVersionResource{
 	Group: "extensions.agents.x-k8s.io", Version: "v1beta1", Resource: "sandboxwarmpools",
 }
 
+var sandboxTemplateResource = schema.GroupVersionResource{
+	Group: "extensions.agents.x-k8s.io", Version: "v1beta1", Resource: "sandboxtemplates",
+}
+
 type Manager struct {
 	config  Config
 	core    kubernetes.Interface
@@ -180,6 +185,10 @@ func NewManager(config Config) (*Manager, error) {
 func (m *Manager) Create(ctx context.Context, request pool.CreateRequest) (pool.Pool, error) {
 	if request.WarmPoolRef != "" {
 		return m.createClaims(ctx, request)
+	}
+	profile, err := m.resolveSandboxProfile(ctx, request.SandboxProfile)
+	if err != nil {
+		return pool.Pool{}, err
 	}
 	if request.Workspace.ClaimName != "" {
 		pvc, err := m.core.CoreV1().PersistentVolumeClaims(m.config.Namespace).Get(ctx, request.Workspace.ClaimName, metav1.GetOptions{})
@@ -215,7 +224,11 @@ func (m *Manager) Create(ctx context.Context, request pool.CreateRequest) (pool.
 
 	createdSandboxes := make([]string, 0, request.Replicas)
 	for index := 0; index < request.Replicas; index++ {
-		sandbox := buildSandbox(m.config, request, index)
+		sandbox, err := buildSandboxWithProfile(m.config, request, index, profile)
+		if err != nil {
+			m.rollback(ctx, createdPVCs, createdSandboxes)
+			return pool.Pool{}, err
+		}
 		if _, err := m.dynamic.Resource(sandboxResource).Namespace(m.config.Namespace).Create(ctx, sandbox, metav1.CreateOptions{}); err != nil {
 			m.rollback(ctx, createdPVCs, createdSandboxes)
 			return pool.Pool{}, fmt.Errorf("create sandbox %d: %w", index, err)
@@ -291,7 +304,26 @@ func (m *Manager) Get(ctx context.Context, name string) (pool.Pool, error) {
 		ctx, metav1.ListOptions{LabelSelector: selectorFor(name)},
 	)
 	if err == nil && len(claims.Items) > 0 {
-		return poolFromClaims(name, claims.Items)
+		result, err := poolFromClaims(name, claims.Items)
+		if err != nil {
+			return pool.Pool{}, err
+		}
+		for _, claim := range claims.Items {
+			result.Resources = append(result.Resources, pool.KubernetesResource{
+				Kind: "sandboxclaim", Name: claim.GetName(), Status: conditionStatus(claim, "Ready"),
+			})
+		}
+		pods, err := m.core.CoreV1().Pods(m.config.Namespace).List(
+			ctx, metav1.ListOptions{LabelSelector: selectorFor(name)},
+		)
+		if err != nil {
+			return pool.Pool{}, fmt.Errorf("list sandbox pods: %w", err)
+		}
+		for _, pod := range pods.Items {
+			result.Resources = append(result.Resources, podResource(pod))
+		}
+		sortPoolResources(result.Resources)
+		return result, nil
 	}
 	if err != nil && !apierrors.IsNotFound(err) {
 		return pool.Pool{}, fmt.Errorf("list sandbox claims: %w", err)
@@ -313,9 +345,11 @@ func (m *Manager) Get(ctx context.Context, name string) (pool.Pool, error) {
 	replicas := 0
 	var readOnly *bool
 	claimName := ""
+	sandboxProfile := ""
 	if len(sandboxes.Items) > 0 {
 		annotations := sandboxes.Items[0].GetAnnotations()
 		claimName = annotations[claimAnnotation]
+		sandboxProfile = annotations[profileAnnotation]
 		if claimName != "" {
 			value, _ := strconv.ParseBool(annotations[readOnlyAnnotation])
 			readOnly = &value
@@ -362,15 +396,74 @@ func (m *Manager) Get(ctx context.Context, name string) (pool.Pool, error) {
 	if pvc.Spec.StorageClassName != nil {
 		storageClass = *pvc.Spec.StorageClassName
 	}
-	return pool.Pool{
+	result := pool.Pool{
 		Name: name, Status: status, Replicas: replicas, ReadyReplicas: ready,
-		SandboxSelector: selector,
+		SandboxSelector: selector, SandboxProfile: sandboxProfile,
 		Workspace: pool.Workspace{
 			Size:       pvc.Spec.Resources.Requests.Storage().String(),
 			AccessMode: string(pvc.Spec.AccessModes[0]), StorageClass: storageClass,
 			ClaimName: claimName, ReadOnly: readOnly,
 		},
-	}, nil
+	}
+	for _, sandbox := range sandboxes.Items {
+		result.Resources = append(result.Resources, pool.KubernetesResource{
+			Kind: "sandbox", Name: sandbox.GetName(), Status: conditionStatus(sandbox, "Ready"),
+		})
+	}
+	for _, pod := range pods.Items {
+		result.Resources = append(result.Resources, podResource(pod))
+	}
+	for _, workspacePVC := range pvcs.Items {
+		result.Resources = append(result.Resources, pvcResource(workspacePVC))
+	}
+	if claimName != "" {
+		result.Resources = append(result.Resources, pvcResource(*pvc))
+	}
+	sortPoolResources(result.Resources)
+	return result, nil
+}
+
+func conditionStatus(resource unstructured.Unstructured, conditionType string) string {
+	conditions, _, _ := unstructured.NestedSlice(resource.Object, "status", "conditions")
+	for _, raw := range conditions {
+		condition, ok := raw.(map[string]any)
+		if !ok || condition["type"] != conditionType {
+			continue
+		}
+		if condition["status"] == "True" {
+			return conditionType
+		}
+		if reason, ok := condition["reason"].(string); ok && reason != "" {
+			return reason
+		}
+	}
+	return "Provisioning"
+}
+
+func podResource(pod corev1.Pod) pool.KubernetesResource {
+	status := string(pod.Status.Phase)
+	if status == "" {
+		status = "Pending"
+	}
+	return pool.KubernetesResource{Kind: "pod", Name: pod.Name, Status: status}
+}
+
+func pvcResource(pvc corev1.PersistentVolumeClaim) pool.KubernetesResource {
+	status := string(pvc.Status.Phase)
+	if status == "" {
+		status = "Pending"
+	}
+	return pool.KubernetesResource{Kind: "pvc", Name: pvc.Name, Status: status}
+}
+
+func sortPoolResources(resources []pool.KubernetesResource) {
+	order := map[string]int{"sandboxclaim": 0, "sandbox": 1, "pod": 2, "pvc": 3}
+	sort.Slice(resources, func(i, j int) bool {
+		if order[resources[i].Kind] != order[resources[j].Kind] {
+			return order[resources[i].Kind] < order[resources[j].Kind]
+		}
+		return resources[i].Name < resources[j].Name
+	})
 }
 
 func (m *Manager) Delete(ctx context.Context, name string) error {
@@ -496,15 +589,14 @@ func hasAccessMode(pvc *corev1.PersistentVolumeClaim, mode corev1.PersistentVolu
 }
 
 func buildSandbox(config Config, request pool.CreateRequest, index int) *unstructured.Unstructured {
+	return buildDefaultSandbox(config, request, index)
+}
+
+func buildDefaultSandbox(config Config, request pool.CreateRequest, index int) *unstructured.Unstructured {
 	labels := map[string]any{poolLabel: request.Name, managedLabel: managedBy}
 	claimName := pvcName(request, index)
 	readOnly := request.Workspace.ReadOnly != nil && *request.Workspace.ReadOnly
-	annotations := map[string]any{
-		readOnlyAnnotation: strconv.FormatBool(readOnly), replicasAnnotation: strconv.Itoa(request.Replicas),
-	}
-	if request.Workspace.ClaimName != "" {
-		annotations[claimAnnotation] = claimName
-	}
+	annotations := sandboxAnnotations(request, claimName, readOnly)
 	podSpec := map[string]any{
 		"topologySpreadConstraints": []any{map[string]any{
 			"maxSkew": int64(1), "topologyKey": "kubernetes.io/hostname", "whenUnsatisfiable": "ScheduleAnyway",
@@ -528,18 +620,35 @@ func buildSandbox(config Config, request pool.CreateRequest, index int) *unstruc
 	if config.SandboxServiceAccount != "" {
 		podSpec["serviceAccountName"] = config.SandboxServiceAccount
 	}
+	return sandboxResourceObject(config.Namespace, request, index, labels, annotations, map[string]any{
+		"podTemplate": map[string]any{
+			"metadata": map[string]any{"labels": labels},
+			"spec":     podSpec,
+		},
+	})
+}
+
+func sandboxAnnotations(request pool.CreateRequest, claimName string, readOnly bool) map[string]any {
+	annotations := map[string]any{
+		readOnlyAnnotation: strconv.FormatBool(readOnly), replicasAnnotation: strconv.Itoa(request.Replicas),
+	}
+	if request.Workspace.ClaimName != "" {
+		annotations[claimAnnotation] = claimName
+	}
+	if request.SandboxProfile != "" {
+		annotations[profileAnnotation] = request.SandboxProfile
+	}
+	return annotations
+}
+
+func sandboxResourceObject(namespace string, request pool.CreateRequest, index int, labels, annotations, spec map[string]any) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "agents.x-k8s.io/v1beta1", "kind": "Sandbox",
 		"metadata": map[string]any{
-			"name": fmt.Sprintf("sandbox-%s-%d", request.Name, index), "namespace": config.Namespace,
+			"name": fmt.Sprintf("sandbox-%s-%d", request.Name, index), "namespace": namespace,
 			"labels": labels, "annotations": annotations,
 		},
-		"spec": map[string]any{
-			"podTemplate": map[string]any{
-				"metadata": map[string]any{"labels": labels},
-				"spec":     podSpec,
-			},
-		},
+		"spec": spec,
 	}}
 }
 

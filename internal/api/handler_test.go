@@ -149,6 +149,32 @@ func TestCreateAcceptsDedicatedRWO(t *testing.T) {
 	}
 }
 
+func TestCreateAcceptsSandboxProfile(t *testing.T) {
+	manager := &fakeManager{}
+	body := []byte(`{"name":"developer","replicas":1,"sandboxProfile":"python-tools","workspace":{"size":"1Gi","accessMode":"ReadWriteOnce"}}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+
+	NewHandler(manager).ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if manager.created.SandboxProfile != "python-tools" {
+		t.Fatalf("sandbox profile = %q", manager.created.SandboxProfile)
+	}
+}
+
+func TestCreateRejectsSandboxProfileWithWarmPool(t *testing.T) {
+	body := []byte(`{"name":"bad","replicas":1,"sandboxProfile":"python-tools","warmPoolRef":"python-warm","workspace":{}}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+
+	NewHandler(&fakeManager{}).ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
 func TestCreateAcceptsExistingReadOnlyClaim(t *testing.T) {
 	manager := &fakeManager{}
 	body := []byte(`{"name":"readers","replicas":3,"workspace":{"claimName":"prepared-workspace","readOnly":true}}`)

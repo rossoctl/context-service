@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -23,18 +24,25 @@ const help = `contextctl manages Context Service resources.
 Usage:
   contextctl <command> [options]
 
+Concepts:
+  Context               Persistent agent data, such as a workspace, memory, or artifacts
+  Sandbox pool          One or more isolated agent environments with workspace context
+  Sandbox profile       Platform-managed runtime settings for sandbox Pods
+  Storage class         Kubernetes storage available to contexts and sandboxes
+
 Commands:
   health                Check the service
+  status                Show Context Service and Kubernetes resources
   storage-class COMMAND Discover Kubernetes storage classes (alias: sc)
   context COMMAND       Create, list, show, or delete named contexts (alias: ctx)
   sandbox-pool COMMAND  Create, list, show, wait for, or delete sandbox pools (alias: sb)
   help [command]        Show help
 
 Quick start:
-  contextctl sandbox-pool create demo --replicas 2 --shared
-  contextctl sandbox-pool wait demo
-  contextctl sandbox-pool get demo
-  contextctl sandbox-pool delete demo
+  contextctl sb create demo --replicas 2 --shared
+  contextctl sb wait demo
+  contextctl status
+  contextctl sb delete demo
 
 Environment:
   CS_URL                 Service URL (default http://localhost:8080)
@@ -73,6 +81,8 @@ func run(args []string) error {
 		}
 		fmt.Println("ok")
 		return nil
+	case "status":
+		return showStatus(c, args[1:])
 	case "storage-class", "sc":
 		return storageClassCommand(c, args[1:])
 	case "storage-classes":
@@ -86,6 +96,61 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q; run 'contextctl help'", args[0])
 	}
+}
+
+type statusView struct {
+	Namespace      string                     `json:"namespace"`
+	SandboxPools   []pool.Pool                `json:"sandboxPools"`
+	Contexts       []contextresource.Resource `json:"contexts"`
+	StorageClasses []storageclass.Resource    `json:"storageClasses"`
+}
+
+func showStatus(c *client.Client, args []string) error {
+	flags := flag.NewFlagSet("status", flag.ContinueOnError)
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	flags.Usage = func() { showHelp([]string{"status"}) }
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		flags.Usage()
+		return errors.New("status does not accept arguments")
+	}
+
+	view, err := loadStatus(c, *namespace)
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		encoded, _ := json.MarshalIndent(view, "", "  ")
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	fmt.Printf("Context Service · namespace: %s\n", view.Namespace)
+	writePools(os.Stdout, view.SandboxPools)
+	writeContexts(os.Stdout, view.Contexts)
+	writeStorageClasses(os.Stdout, view.StorageClasses)
+	return nil
+}
+
+func loadStatus(c *client.Client, namespace string) (statusView, error) {
+	pools, err := c.List(context.Background())
+	if err != nil {
+		return statusView{}, err
+	}
+	contexts, err := c.ListContexts(context.Background(), namespace)
+	if err != nil {
+		return statusView{}, err
+	}
+	classes, err := c.ListStorageClasses(context.Background())
+	if err != nil {
+		return statusView{}, err
+	}
+	return statusView{
+		Namespace: namespace, SandboxPools: pools, Contexts: contexts, StorageClasses: classes,
+	}, nil
 }
 
 func storageClassCommand(c *client.Client, args []string) error {
@@ -280,6 +345,7 @@ func createSandboxPool(c *client.Client, args []string) error {
 	flags.StringVar(&storageClass, "c", storageClass, "storage class (shorthand)")
 	shared := flags.Bool("shared", false, "use one RWX workspace shared by all sandboxes")
 	claimName := flags.String("claim", "", "mount an existing PVC instead of creating workspace storage")
+	sandboxProfile := flags.String("sandbox-profile", "", "use an existing SandboxTemplate")
 	warmPoolRef := flags.String("warm-pool", "", "claim ready sandboxes from an existing SandboxWarmPool")
 	readOnly := flags.Bool("read-only", false, "mount the existing claim read-only")
 	readWrite := flags.Bool("read-write", false, "mount the existing claim read-write")
@@ -291,6 +357,9 @@ func createSandboxPool(c *client.Client, args []string) error {
 	}
 	workspace := pool.Workspace{Size: size, AccessMode: "ReadWriteOnce", StorageClass: storageClass}
 	if *warmPoolRef != "" {
+		if *sandboxProfile != "" {
+			return errors.New("--sandbox-profile cannot be combined with --warm-pool; the warm pool already selects a template")
+		}
 		incompatible := map[string]bool{
 			"shared": false, "claim": false, "read-only": false, "read-write": false,
 			"workspace-size": false, "s": false, "storage-class": false, "c": false,
@@ -317,7 +386,7 @@ func createSandboxPool(c *client.Client, args []string) error {
 		workspace.AccessMode = "ReadWriteMany"
 	}
 	result, err := c.Create(context.Background(), pool.CreateRequest{
-		Name: name, Replicas: replicas, WarmPoolRef: *warmPoolRef,
+		Name: name, Replicas: replicas, SandboxProfile: *sandboxProfile, WarmPoolRef: *warmPoolRef,
 		Workspace: workspace,
 	})
 	if err != nil {
@@ -425,9 +494,7 @@ func printPool(value pool.Pool, jsonOutput bool) {
 		fmt.Println(string(encoded))
 		return
 	}
-	fmt.Printf("%s: %s (%d/%d ready), %s, selector %s\n",
-		value.Name, value.Status, value.ReadyReplicas, value.Replicas,
-		workspaceSummary(value), value.SandboxSelector)
+	writePools(os.Stdout, []pool.Pool{value})
 }
 
 func printPools(items []pool.Pool, jsonOutput bool) {
@@ -436,17 +503,101 @@ func printPools(items []pool.Pool, jsonOutput bool) {
 		fmt.Println(string(encoded))
 		return
 	}
+	writePools(os.Stdout, items)
+}
+
+func writePools(w io.Writer, items []pool.Pool) {
+	fmt.Fprintf(w, "\nSANDBOX POOLS (%d)\n", len(items))
 	if len(items) == 0 {
-		fmt.Println("No sandbox pools found.")
+		fmt.Fprintln(w, "None")
 		return
 	}
-	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(writer, "NAME\tSTATUS\tREADY\tWORKSPACE\tSELECTOR")
-	for _, item := range items {
-		fmt.Fprintf(writer, "%s\t%s\t%d/%d\t%s\t%s\n", item.Name, item.Status,
-			item.ReadyReplicas, item.Replicas, workspaceSummary(item), item.SandboxSelector)
+	for index, item := range items {
+		if index > 0 {
+			fmt.Fprintln(w)
+		}
+		fmt.Fprintf(w, "%s  %s · %d/%d · %s\n", item.Name, displayStatus(item.Status),
+			item.ReadyReplicas, item.Replicas, workspaceDescription(item))
+		writePoolResources(w, item)
 	}
-	_ = writer.Flush()
+}
+
+type poolResourceNode struct {
+	resource pool.KubernetesResource
+	children []string
+}
+
+func writePoolResources(w io.Writer, value pool.Pool) {
+	used := make(map[int]bool)
+	nodes := make([]poolResourceNode, 0, len(value.Resources))
+	for index, resource := range value.Resources {
+		if resource.Kind != "sandbox" {
+			continue
+		}
+		used[index] = true
+		node := poolResourceNode{resource: resource}
+		if podIndex := resourceIndex(value.Resources, "pod", resource.Name); podIndex >= 0 {
+			pod := value.Resources[podIndex]
+			used[podIndex] = true
+			node.children = append(node.children, fmt.Sprintf("pod/%s  %s", pod.Name, displayStatus(pod.Status)))
+		}
+		if pvcName := workspacePVCName(value, resource.Name); pvcName != "" {
+			if pvcIndex := resourceIndex(value.Resources, "pvc", pvcName); pvcIndex >= 0 {
+				pvc := value.Resources[pvcIndex]
+				used[pvcIndex] = true
+				node.children = append(node.children, fmt.Sprintf("workspace → pvc/%s  %s", pvc.Name, displayStatus(pvc.Status)))
+			}
+		}
+		nodes = append(nodes, node)
+	}
+	for index, resource := range value.Resources {
+		if !used[index] {
+			nodes = append(nodes, poolResourceNode{resource: resource})
+		}
+	}
+
+	for index, node := range nodes {
+		lastNode := index == len(nodes)-1
+		connector := "├──"
+		childIndent := "│   "
+		if lastNode {
+			connector = "└──"
+			childIndent = "    "
+		}
+		fmt.Fprintf(w, "%s %s/%s  %s\n", connector, node.resource.Kind, node.resource.Name,
+			displayStatus(node.resource.Status))
+		for childIndex, child := range node.children {
+			childConnector := "├──"
+			if childIndex == len(node.children)-1 {
+				childConnector = "└──"
+			}
+			fmt.Fprintf(w, "%s%s %s\n", childIndent, childConnector, child)
+		}
+	}
+}
+
+func resourceIndex(resources []pool.KubernetesResource, kind, name string) int {
+	for index, resource := range resources {
+		if resource.Kind == kind && resource.Name == name {
+			return index
+		}
+	}
+	return -1
+}
+
+func workspacePVCName(value pool.Pool, sandboxName string) string {
+	if value.Workspace.ClaimName != "" {
+		return value.Workspace.ClaimName
+	}
+	if value.Workspace.AccessMode == "ReadWriteMany" {
+		return value.Name + "-workspace"
+	}
+	prefix := "sandbox-" + value.Name + "-"
+	index, found := strings.CutPrefix(sandboxName, prefix)
+	if !found {
+		return ""
+	}
+	return value.Name + "-workspace-" + index
 }
 
 func printStorageClasses(items []storageclass.Resource, jsonOutput bool) {
@@ -455,15 +606,22 @@ func printStorageClasses(items []storageclass.Resource, jsonOutput bool) {
 		fmt.Println(string(encoded))
 		return
 	}
+	writeStorageClasses(os.Stdout, items)
+}
+
+func writeStorageClasses(w io.Writer, items []storageclass.Resource) {
+	fmt.Fprintf(w, "\nSTORAGE CLASSES (%d)\n", len(items))
 	if len(items) == 0 {
-		fmt.Println("No storage classes found.")
+		fmt.Fprintln(w, "None")
 		return
 	}
-	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(writer, "NAME\tDEFAULT\tPROVISIONER\tBINDING MODE\tEXPANSION")
+	writer := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	for _, item := range items {
-		fmt.Fprintf(writer, "%s\t%t\t%s\t%s\t%t\n", item.Name, item.Default,
-			item.Provisioner, item.VolumeBindingMode, item.AllowVolumeExpansion)
+		name := item.Name
+		if item.Default {
+			name += " (default)"
+		}
+		fmt.Fprintf(writer, "%s\t%s · %s\n", name, item.Provisioner, item.VolumeBindingMode)
 	}
 	_ = writer.Flush()
 }
@@ -474,19 +632,24 @@ func printContexts(items []contextresource.Resource, jsonOutput bool) {
 		fmt.Println(string(encoded))
 		return
 	}
+	writeContexts(os.Stdout, items)
+}
+
+func writeContexts(w io.Writer, items []contextresource.Resource) {
+	fmt.Fprintf(w, "\nCONTEXTS (%d)\n", len(items))
 	if len(items) == 0 {
-		fmt.Println("No contexts found.")
+		fmt.Fprintln(w, "None")
 		return
 	}
-	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(writer, "NAME\tNAMESPACE\tTYPE\tSTATUS\tSTORAGE\tKUBERNETES RESOURCE")
-	for _, item := range items {
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s %s (%s)\t%s/%s\n", item.Name, item.Namespace,
-			item.Type, item.Status, item.Storage.Size, item.Storage.AccessMode,
-			storageClassName(item.Storage.StorageClass), strings.ToLower(item.Attachment.Kind),
-			item.Attachment.ClaimName)
+	for index, item := range items {
+		if index > 0 {
+			fmt.Fprintln(w)
+		}
+		fmt.Fprintf(w, "%s  %s · %s\n", item.Name, displayStatus(item.Status), item.Type)
+		fmt.Fprintf(w, "└── %s/%s  %s %s · %s\n", strings.ToLower(item.Attachment.Kind),
+			item.Attachment.ClaimName, item.Storage.Size, shortMode(item.Storage.AccessMode),
+			storageClassName(item.Storage.StorageClass))
 	}
-	_ = writer.Flush()
 }
 
 func printContext(value contextresource.Resource, jsonOutput bool) {
@@ -525,6 +688,30 @@ func workspaceSummary(value pool.Pool) string {
 		return "warm pool " + value.WarmPoolRef
 	}
 	return fmt.Sprintf("%s %s", value.Workspace.Size, shortMode(value.Workspace.AccessMode))
+}
+
+func workspaceDescription(value pool.Pool) string {
+	if value.WarmPoolRef != "" {
+		return "warm pool " + value.WarmPoolRef
+	}
+	topology := "dedicated"
+	if value.Workspace.ClaimName != "" {
+		topology = "existing"
+	} else if value.Workspace.AccessMode == "ReadWriteMany" {
+		topology = "shared"
+	}
+	description := fmt.Sprintf("%s · %s", topology, workspaceSummary(value))
+	if value.SandboxProfile != "" {
+		description += " · profile " + value.SandboxProfile
+	}
+	return description
+}
+
+func displayStatus(value string) string {
+	if value == "" {
+		return "Unknown"
+	}
+	return strings.ToUpper(value[:1]) + value[1:]
 }
 
 func shortMode(mode string) string {
@@ -615,6 +802,7 @@ Run "contextctl help sandbox-pool COMMAND" for command options.
 Create one sandbox with a 1Gi RWO workspace by default.
 
 Options:
+  --sandbox-profile NAME Use an existing SandboxTemplate for the runtime
   --shared             Use one RWX workspace shared by all sandboxes
   --warm-pool NAME      Claim sandboxes from an existing SandboxWarmPool
   --claim NAME          Mount an existing PVC; CS will not delete it
@@ -627,6 +815,7 @@ Options:
 
 Examples:
   contextctl sandbox-pool create demo
+  contextctl sandbox-pool create developer --sandbox-profile shell
   contextctl sandbox-pool create demo --shared --replicas 2
   contextctl sandbox-pool create review --shared --replicas 3 --workspace-size 5Gi
   contextctl sandbox-pool create fast-run --warm-pool research-agents --replicas 3
@@ -646,6 +835,8 @@ Examples:
 		}
 	case "health":
 		fmt.Print("Usage: contextctl health\n")
+	case "status":
+		fmt.Print("Usage: contextctl status [--namespace NAME] [--json]\n")
 	default:
 		fmt.Printf("Unknown command %q.\n\n%s", args[0], help)
 	}
