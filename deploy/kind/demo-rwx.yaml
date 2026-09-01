@@ -1,0 +1,60 @@
+# Demo-only RWX storage for the single-node Kind cluster.
+# Production clusters should use an RWX-capable CSI storage class instead.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: demo-rwx
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: demo-shared-workspace
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: demo-rwx
+  volumeMode: Filesystem
+  claimRef:
+    namespace: serverless-harness
+    name: demo-shared-workspace
+  hostPath:
+    path: /var/context-service-demo/shared
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: demo-readonly-workspace
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: demo-rwx
+  volumeMode: Filesystem
+  claimRef:
+    namespace: serverless-harness
+    name: demo-readonly-workspace
+  hostPath:
+    path: /var/context-service-demo/readonly
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: demo-readonly-workspace
+  namespace: serverless-harness
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: demo-rwx
+  volumeName: demo-readonly-workspace

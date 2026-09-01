@@ -161,13 +161,14 @@ demo_clean() {
   fi
 
   wait_for_http "http://127.0.0.1:${HOST_PORT}/healthz" >/dev/null
-  for pool_name in demo-solo demo-team; do
+  for pool_name in demo-solo demo-team demo-dedicated demo-shared demo-readonly; do
     contextctl_demo sb delete "$pool_name" >/dev/null 2>&1 || true
   done
-  kubectl_kind -n "$NAMESPACE" delete pod demo-agent --ignore-not-found --wait=true >/dev/null
+  kubectl_kind -n "$NAMESPACE" delete pod demo-agent demo-storage-setup --ignore-not-found --wait=true >/dev/null
   for context_name in demo-workspace demo-memory demo-artifacts; do
     contextctl_demo ctx delete "$context_name" >/dev/null 2>&1 || true
   done
+  kubectl_kind delete -f "$ROOT_DIR/deploy/kind/demo-rwx.yaml" --ignore-not-found >/dev/null
   echo "Demo resources deleted"
 }
 
@@ -214,10 +215,73 @@ EOF
   kubectl_kind -n "$NAMESPACE" wait --for=condition=Ready pod/demo-agent --timeout=2m >/dev/null
 
   echo "Creating example sandbox pools..."
-  create_demo_pool demo-solo --sandbox-profile shell --workspace-size 1Gi
-  create_demo_pool demo-team --sandbox-profile shell --replicas 2 --workspace-size 1Gi
-  contextctl_demo sb wait demo-solo --timeout 2m >/dev/null
-  contextctl_demo sb wait demo-team --timeout 2m >/dev/null
+  kubectl_kind apply -f "$ROOT_DIR/deploy/kind/demo-rwx.yaml" >/dev/null
+
+  kubectl_kind -n "$NAMESPACE" apply -f - >/dev/null <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: demo-storage-setup
+spec:
+  restartPolicy: Never
+  containers:
+    - name: setup
+      image: busybox:1.36
+      command:
+        - sh
+        - -c
+        - |
+          chown 65532:65532 /shared /readonly
+          chmod 0770 /shared /readonly
+          rm -f /shared/demo.txt /shared/.context-service-shared-check
+          echo context-service-demo > /readonly/example.txt
+          chown 65532:65532 /readonly/example.txt
+      securityContext:
+        runAsUser: 0
+      volumeMounts:
+        - {name: shared, mountPath: /shared}
+        - {name: readonly, mountPath: /readonly}
+  volumes:
+    - name: shared
+      hostPath:
+        path: /var/context-service-demo/shared
+        type: DirectoryOrCreate
+    - name: readonly
+      hostPath:
+        path: /var/context-service-demo/readonly
+        type: DirectoryOrCreate
+EOF
+  kubectl_kind -n "$NAMESPACE" wait --for=jsonpath='{.status.phase}'=Succeeded \
+    pod/demo-storage-setup --timeout=2m >/dev/null
+  kubectl_kind -n "$NAMESPACE" delete pod demo-storage-setup --wait=true >/dev/null
+
+  create_demo_pool demo-dedicated --sandbox-profile shell --replicas 2 --workspace-size 1Gi
+  create_demo_pool demo-shared --sandbox-profile shell --shared --replicas 2 \
+    --workspace-size 1Gi --storage-class demo-rwx
+  create_demo_pool demo-readonly --sandbox-profile shell --claim demo-readonly-workspace \
+    --read-only --replicas 2
+  contextctl_demo sb wait demo-dedicated --timeout 2m >/dev/null
+  contextctl_demo sb wait demo-shared --timeout 2m >/dev/null
+  contextctl_demo sb wait demo-readonly --timeout 2m >/dev/null
+
+  local shared_marker="/workspace/.context-service-shared-check"
+  local shared_value
+  kubectl_kind -n "$NAMESPACE" exec sandbox-demo-shared-0 -- \
+    sh -c "echo shared-workspace-ready > '$shared_marker'"
+  shared_value="$(kubectl_kind -n "$NAMESPACE" exec sandbox-demo-shared-1 -- cat "$shared_marker" 2>/dev/null || true)"
+  kubectl_kind -n "$NAMESPACE" exec sandbox-demo-shared-0 -- rm -f "$shared_marker"
+  if [[ "$shared_value" != "shared-workspace-ready" ]]; then
+    echo "shared workspace could not be read from both demo sandboxes" >&2
+    exit 1
+  fi
+  if [[ "$(kubectl_kind -n "$NAMESPACE" exec sandbox-demo-readonly-0 -- cat /workspace/example.txt)" != "context-service-demo" ]]; then
+    echo "read-only workspace content was not available to the demo sandbox" >&2
+    exit 1
+  fi
+  if kubectl_kind -n "$NAMESPACE" exec sandbox-demo-readonly-0 -- touch /workspace/should-fail >/dev/null 2>&1; then
+    echo "read-only workspace unexpectedly allowed a write" >&2
+    exit 1
+  fi
 
   contextctl_demo status
   echo

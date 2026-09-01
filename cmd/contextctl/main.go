@@ -696,7 +696,10 @@ func workspaceDescription(value pool.Pool) string {
 	}
 	topology := "dedicated"
 	if value.Workspace.ClaimName != "" {
-		topology = "existing"
+		topology = "existing read-write"
+		if value.Workspace.ReadOnly != nil && *value.Workspace.ReadOnly {
+			topology = "existing read-only"
+		}
 	} else if value.Workspace.AccessMode == "ReadWriteMany" {
 		topology = "shared"
 	}

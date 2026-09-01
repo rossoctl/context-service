@@ -72,8 +72,12 @@ contextctl status
 The demo includes:
 
 - `demo-workspace`, `demo-memory`, and `demo-artifacts` contexts mounted by a sample agent
-- `demo-solo`, with one profiled sandbox and its own workspace
-- `demo-team`, with two profiled sandboxes and a workspace for each
+- `demo-dedicated`, with two profiled sandboxes and a workspace for each
+- `demo-shared`, with two profiled sandboxes attached to one shared workspace
+- `demo-readonly`, with two profiled sandboxes mounting prepared context read-only
+
+The shared example uses a demo-only host-path RWX volume because Kind's default `local-path`
+provisioner supports only RWO. Production environments should use an RWX-capable CSI driver.
 
 ```sh
 make kind-demo-clean
