@@ -32,6 +32,7 @@ Usage: hack/kind-quickstart.sh [up|demo|demo-clean|smoke|down]
 Environment:
   KIND_CLUSTER_NAME      Cluster name (default: context-service)
   CONTEXT_SERVICE_PORT   Host port for the service (default: 8080)
+  DOCKER_BUILD_FLAGS     Additional Docker build flags (for example: --load)
 EOF
 }
 
