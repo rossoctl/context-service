@@ -15,6 +15,9 @@ readonly LOCAL_PATH_MANIFEST="https://raw.githubusercontent.com/rancher/local-pa
 readonly AGENT_SANDBOX_VERSION="v1.0.0"
 readonly AGENT_SANDBOX_MANIFEST="https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/sandbox-with-extensions.yaml"
 
+# Set DOCKER_BUILD_FLAGS to --load when using Podman
+DOCKER_BUILD_FLAGS=${DOCKER_BUILD_FLAGS:-""}
+
 usage() {
   cat <<'EOF'
 Usage: hack/kind-quickstart.sh [up|demo|demo-clean|smoke|down]
@@ -29,6 +32,7 @@ Usage: hack/kind-quickstart.sh [up|demo|demo-clean|smoke|down]
 Environment:
   KIND_CLUSTER_NAME      Cluster name (default: context-service)
   CONTEXT_SERVICE_PORT   Host port for the service (default: 8080)
+  DOCKER_BUILD_FLAGS     Additional Docker build flags (for example: --load)
 EOF
 }
 
@@ -102,7 +106,7 @@ up() {
   kubectl_kind apply -f "$AGENT_SANDBOX_MANIFEST"
   kubectl_kind -n agent-sandbox-system rollout status deployment/agent-sandbox-controller --timeout=2m
 
-  docker build --tag "$IMAGE" "$ROOT_DIR"
+  docker build ${DOCKER_BUILD_FLAGS} --tag "$IMAGE" "$ROOT_DIR"
   kind load docker-image --name "$CLUSTER_NAME" "$IMAGE"
 
   kubectl_kind apply -f "$ROOT_DIR/deploy/kind/namespace.yaml"
