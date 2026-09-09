@@ -9,12 +9,15 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/rossoctl/context-service/internal/client"
 	"github.com/rossoctl/context-service/internal/contextresource"
+	"github.com/rossoctl/context-service/internal/localcontext"
 	"github.com/rossoctl/context-service/internal/pool"
 	"github.com/rossoctl/context-service/internal/storageclass"
 )
@@ -49,6 +52,7 @@ Environment:
   CS_TOKEN               Gateway token for public access
   CS_NAMESPACE           Default context namespace (default serverless-harness)
   CS_STORAGE_CLASS       Default storage class for create
+  CS_CONTEXT_HOME        Local context directory (default ~/.contexts)
 
 Run "contextctl help <command>" for command options and examples.
 `
@@ -89,6 +93,8 @@ func run(args []string) error {
 		return errors.New("storage-classes moved; use 'contextctl storage-class list'")
 	case "context", "ctx":
 		return contextCommand(c, args[1:])
+	case "hook":
+		return hookCommand(args[1:], os.Stdin)
 	case "sandbox-pool", "sb":
 		return sandboxPoolCommand(c, args[1:])
 	case "create", "get", "wait", "rm", "delete":
@@ -248,6 +254,14 @@ func contextCommand(c *client.Client, args []string) error {
 		return getContext(c, args[1:])
 	case "delete", "rm":
 		return removeContext(c, args[1:])
+	case "capture":
+		return captureContext(args[1:])
+	case "restore":
+		return restoreContext(args[1:])
+	case "attach":
+		return attachContext(args[1:])
+	case "detach":
+		return detachContext(args[1:])
 	default:
 		return fmt.Errorf("unknown context command %q; run 'contextctl help context'", args[0])
 	}
@@ -255,6 +269,7 @@ func contextCommand(c *client.Client, args []string) error {
 
 func createContext(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context create", flag.ContinueOnError)
+	backend := flags.String("backend", "pvc", "storage backend: pvc or filesystem")
 	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
 	contextType := flags.String("type", "workspace", "context type")
 	size := flags.String("size", "1Gi", "storage size")
@@ -265,6 +280,17 @@ func createContext(c *client.Client, args []string) error {
 	name, err := parseContextName(flags, args)
 	if err != nil {
 		return err
+	}
+	if *backend == "filesystem" || *backend == "local" {
+		result, err := localContextStore().Create(name, *contextType)
+		if err != nil {
+			return err
+		}
+		printLocalContext(result, *jsonOutput)
+		return nil
+	}
+	if *backend != "pvc" {
+		return fmt.Errorf("unsupported context backend %q; use pvc or filesystem", *backend)
 	}
 	result, err := c.CreateContext(context.Background(), contextresource.CreateRequest{
 		Name: name, Namespace: *namespace, Type: *contextType,
@@ -281,6 +307,7 @@ func createContext(c *client.Client, args []string) error {
 
 func listContexts(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context list", flag.ContinueOnError)
+	backend := flags.String("backend", "all", "storage backend: all, pvc, or filesystem")
 	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"context", "list"}) }
@@ -290,6 +317,30 @@ func listContexts(c *client.Client, args []string) error {
 	if flags.NArg() != 0 {
 		flags.Usage()
 		return errors.New("context list does not accept arguments")
+	}
+	if *backend == "filesystem" || *backend == "local" {
+		items, err := localContextStore().List()
+		if err != nil {
+			return err
+		}
+		printLocalContexts(items, *jsonOutput)
+		return nil
+	}
+	if *backend == "all" {
+		localItems, err := localContextStore().List()
+		if err != nil {
+			return err
+		}
+		kubernetesItems, kubernetesErr := c.ListContexts(context.Background(), *namespace)
+		warning := ""
+		if kubernetesErr != nil {
+			warning = "Kubernetes contexts unavailable: " + kubernetesErr.Error()
+		}
+		printContextInventory(localItems, kubernetesItems, warning, *jsonOutput)
+		return nil
+	}
+	if *backend != "pvc" {
+		return fmt.Errorf("unsupported context backend %q; use all, pvc, or filesystem", *backend)
 	}
 	items, err := c.ListContexts(context.Background(), *namespace)
 	if err != nil {
@@ -301,6 +352,7 @@ func listContexts(c *client.Client, args []string) error {
 
 func getContext(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context get", flag.ContinueOnError)
+	backend := flags.String("backend", "pvc", "storage backend: pvc or filesystem")
 	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"context", "get"}) }
@@ -308,12 +360,413 @@ func getContext(c *client.Client, args []string) error {
 	if err != nil {
 		return err
 	}
+	if *backend == "filesystem" || *backend == "local" {
+		result, err := localContextStore().Get(name)
+		if err != nil {
+			return err
+		}
+		printLocalContext(result, *jsonOutput)
+		return nil
+	}
+	if *backend != "pvc" {
+		return fmt.Errorf("unsupported context backend %q; use pvc or filesystem", *backend)
+	}
 	result, err := c.GetContext(context.Background(), *namespace, name)
 	if err != nil {
 		return err
 	}
 	printContext(result, *jsonOutput)
 	return nil
+}
+
+func captureContext(args []string) error {
+	flags := flag.NewFlagSet("context capture", flag.ContinueOnError)
+	harness := flags.String("harness", "claude", "agent harness")
+	project := flags.String("project", ".", "project directory")
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	flags.Usage = func() { showHelp([]string{"context", "capture"}) }
+	name, err := parseContextName(flags, args)
+	if err != nil {
+		return err
+	}
+	if *harness != "claude" {
+		return fmt.Errorf("unsupported harness %q; only claude is available in this demo", *harness)
+	}
+	capture, err := localContextStore().CaptureClaude(name, *project, claudeConfigHome())
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		encoded, _ := json.MarshalIndent(capture, "", "  ")
+		fmt.Println(string(encoded))
+		return nil
+	}
+	fmt.Printf("Captured Claude state in %s\n", name)
+	fmt.Printf("Project:  %s\n", capture.Project)
+	fmt.Printf("Sessions: %d\n", capture.Sessions)
+	fmt.Printf("Files:    %d (%s)\n", capture.Files, formatBytes(capture.Bytes))
+	return nil
+}
+
+func restoreContext(args []string) error {
+	flags := flag.NewFlagSet("context restore", flag.ContinueOnError)
+	harness := flags.String("harness", "claude", "agent harness")
+	project := flags.String("project", ".", "destination project directory")
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	flags.Usage = func() { showHelp([]string{"context", "restore"}) }
+	name, err := parseContextName(flags, args)
+	if err != nil {
+		return err
+	}
+	if *harness != "claude" {
+		return fmt.Errorf("unsupported harness %q; only claude is available in this demo", *harness)
+	}
+	capture, destination, err := localContextStore().RestoreClaude(name, *project, claudeConfigHome())
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		encoded, _ := json.MarshalIndent(struct {
+			localcontext.Capture
+			Destination string `json:"destination"`
+		}{Capture: capture, Destination: destination}, "", "  ")
+		fmt.Println(string(encoded))
+		return nil
+	}
+	fmt.Printf("Restored Claude state to %s\n", destination)
+	fmt.Printf("Sessions: %d\n", capture.Sessions)
+	fmt.Printf("Next:     cd %s && claude --resume\n", *project)
+	return nil
+}
+
+func attachContext(args []string) error {
+	flags := flag.NewFlagSet("context attach", flag.ContinueOnError)
+	harness := flags.String("harness", "claude", "agent harness")
+	project := flags.String("project", ".", "project directory")
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	flags.Usage = func() { showHelp([]string{"context", "attach"}) }
+	name, err := parseContextName(flags, args)
+	if err != nil {
+		return err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate contextctl: %w", err)
+	}
+	var attachment localcontext.Attachment
+	switch *harness {
+	case "claude":
+		attachment, err = localContextStore().AttachClaude(name, *project, executable)
+	case "codex":
+		attachment, err = localContextStore().AttachCodex(name, *project, executable)
+	case "opencode":
+		opencodeExecutable, lookupErr := exec.LookPath("opencode")
+		if lookupErr != nil {
+			return errors.New("opencode is not installed or not on PATH")
+		}
+		attachment, err = localContextStore().AttachOpenCode(name, *project, executable, opencodeExecutable)
+	case "pi":
+		attachment, err = localContextStore().AttachPi(name, *project, executable)
+	default:
+		return fmt.Errorf("unsupported harness %q; use claude, codex, opencode, or pi", *harness)
+	}
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		encoded, _ := json.MarshalIndent(attachment, "", "  ")
+		fmt.Println(string(encoded))
+		return nil
+	}
+	fmt.Printf("Attached %s to %s in %s\n", name, displayHarness(*harness), attachment.Project)
+	fmt.Println("State will be captured automatically after completed responses.")
+	fmt.Printf("Next: %s\n", *harness)
+	if *harness == "codex" {
+		fmt.Println("In Codex, open /hooks once to review and trust the new project hooks.")
+	}
+	return nil
+}
+
+func detachContext(args []string) error {
+	flags := flag.NewFlagSet("context detach", flag.ContinueOnError)
+	harness := flags.String("harness", "claude", "agent harness")
+	project := flags.String("project", "", "override attached project directory")
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	flags.Usage = func() { showHelp([]string{"context", "detach"}) }
+	name, err := parseContextName(flags, args)
+	if err != nil {
+		return err
+	}
+	var attachment localcontext.Attachment
+	switch *harness {
+	case "claude":
+		attachment, err = localContextStore().DetachClaude(name, *project)
+	case "codex":
+		attachment, err = localContextStore().DetachCodex(name, *project)
+	case "opencode":
+		attachment, err = localContextStore().DetachOpenCode(name, *project)
+	case "pi":
+		attachment, err = localContextStore().DetachPi(name, *project)
+	default:
+		return fmt.Errorf("unsupported harness %q; use claude, codex, opencode, or pi", *harness)
+	}
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		encoded, _ := json.MarshalIndent(attachment, "", "  ")
+		fmt.Println(string(encoded))
+		return nil
+	}
+	fmt.Printf("Detached %s from %s in %s\n", name, displayHarness(*harness), attachment.Project)
+	return nil
+}
+
+func hookCommand(args []string, input io.Reader) error {
+	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
+		fmt.Print(`contextctl hook is used internally by agent harness integrations.
+
+To capture state automatically, run:
+  contextctl ctx attach NAME --harness claude|codex|opencode|pi
+`)
+		return nil
+	}
+	switch args[0] {
+	case "claude-capture", "claude-session-end":
+		return claudeHookCommand(args[1:], input)
+	case "codex-capture":
+		return codexHookCommand(args[1:], input)
+	case "opencode-capture":
+		return openCodeHookCommand(args[1:])
+	case "pi-capture":
+		return piHookCommand(args[1:])
+	default:
+		return errors.New("unknown hook command; hooks are installed by 'contextctl ctx attach'")
+	}
+
+}
+
+func claudeHookCommand(args []string, input io.Reader) error {
+	flags := flag.NewFlagSet("hook claude-capture", flag.ContinueOnError)
+	contextName := flags.String("context", "", "context name")
+	project := flags.String("project", "", "project directory")
+	contextHome := flags.String("context-home", "", "local context directory")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *contextName == "" || *project == "" {
+		return errors.New("Claude hook requires --context and --project")
+	}
+	store := localContextStore()
+	if *contextHome != "" {
+		store = localcontext.New(*contextHome)
+	}
+	_, err := store.CaptureClaudeHook(*contextName, *project, claudeConfigHome(), input)
+	return err
+}
+
+func codexHookCommand(args []string, input io.Reader) error {
+	flags := flag.NewFlagSet("hook codex-capture", flag.ContinueOnError)
+	contextName := flags.String("context", "", "context name")
+	project := flags.String("project", "", "project directory")
+	contextHome := flags.String("context-home", "", "local context directory")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *contextName == "" || *project == "" {
+		return errors.New("Codex hook requires --context and --project")
+	}
+	store := localContextStore()
+	if *contextHome != "" {
+		store = localcontext.New(*contextHome)
+	}
+	_, _, err := store.CaptureCodexHook(*contextName, *project, input)
+	return err
+}
+
+func openCodeHookCommand(args []string) error {
+	flags := flag.NewFlagSet("hook opencode-capture", flag.ContinueOnError)
+	contextName := flags.String("context", "", "context name")
+	project := flags.String("project", "", "project directory")
+	contextHome := flags.String("context-home", "", "local context directory")
+	opencodeExecutable := flags.String("opencode", "opencode", "OpenCode executable")
+	sessionID := flags.String("session", "", "OpenCode session ID")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *contextName == "" || *project == "" || *sessionID == "" {
+		return errors.New("OpenCode hook requires --context, --project, and --session")
+	}
+	command := exec.Command(*opencodeExecutable, "export", *sessionID, "--pure")
+	output, err := command.Output()
+	if err != nil {
+		return fmt.Errorf("export OpenCode session: %w", err)
+	}
+	store := localContextStore()
+	if *contextHome != "" {
+		store = localcontext.New(*contextHome)
+	}
+	_, _, err = store.CaptureSessionExport(*contextName, "opencode", *project, *sessionID, strings.NewReader(string(output)))
+	return err
+}
+
+func piHookCommand(args []string) error {
+	flags := flag.NewFlagSet("hook pi-capture", flag.ContinueOnError)
+	contextName := flags.String("context", "", "context name")
+	project := flags.String("project", "", "project directory")
+	contextHome := flags.String("context-home", "", "local context directory")
+	sessionFile := flags.String("session-file", "", "Pi session file")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *contextName == "" || *project == "" || *sessionFile == "" {
+		return errors.New("Pi hook requires --context, --project, and --session-file")
+	}
+	store := localContextStore()
+	if *contextHome != "" {
+		store = localcontext.New(*contextHome)
+	}
+	_, _, err := store.CaptureSessionFile(*contextName, "pi", *project, "", *sessionFile)
+	return err
+}
+
+func displayHarness(value string) string {
+	switch value {
+	case "claude":
+		return "Claude"
+	case "codex":
+		return "Codex"
+	case "opencode":
+		return "OpenCode"
+	case "pi":
+		return "Pi"
+	default:
+		return value
+	}
+}
+
+func localContextStore() *localcontext.Store {
+	return localcontext.New(localContextHome())
+}
+
+func localContextHome() string {
+	if configured := os.Getenv("CS_CONTEXT_HOME"); configured != "" {
+		return configured
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".contexts"
+	}
+	return filepath.Join(home, ".contexts")
+}
+
+func claudeConfigHome() string {
+	if configured := os.Getenv("CLAUDE_CONFIG_DIR"); configured != "" {
+		return configured
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".claude"
+	}
+	return filepath.Join(home, ".claude")
+}
+
+func printLocalContext(value localcontext.Manifest, jsonOutput bool) {
+	if jsonOutput {
+		encoded, _ := json.MarshalIndent(value, "", "  ")
+		fmt.Println(string(encoded))
+		return
+	}
+	fmt.Printf("%s  ready · %s · filesystem\n", value.Name, value.Type)
+	fmt.Printf("└── path  %s\n", value.Path)
+	printLocalHarnesses(value)
+}
+
+func printLocalHarnesses(value localcontext.Manifest) {
+	for _, harness := range []string{"claude", "codex", "opencode", "pi"} {
+		if capture, ok := value.Captures[harness]; ok {
+			fmt.Printf("    └── %s  %d sessions · %s\n", displayHarness(harness), capture.Sessions, formatBytes(capture.Bytes))
+		}
+		if attachment, ok := value.Attachments[harness]; ok {
+			fmt.Printf("    └── attached to %s  %s\n", displayHarness(harness), attachment.Project)
+		}
+	}
+}
+
+func printContextInventory(localItems []localcontext.Manifest, kubernetesItems []contextresource.Resource, warning string, jsonOutput bool) {
+	if jsonOutput {
+		encoded, _ := json.MarshalIndent(struct {
+			Filesystem []localcontext.Manifest    `json:"filesystem"`
+			PVC        []contextresource.Resource `json:"pvc"`
+			Warning    string                     `json:"warning,omitempty"`
+		}{Filesystem: localItems, PVC: kubernetesItems, Warning: warning}, "", "  ")
+		fmt.Println(string(encoded))
+		return
+	}
+
+	fmt.Println("\nCONTEXTS")
+	fmt.Printf("\nFILESYSTEM (%d)\n", len(localItems))
+	if len(localItems) == 0 {
+		fmt.Println("None")
+	}
+	for index, item := range localItems {
+		if index > 0 {
+			fmt.Println()
+		}
+		fmt.Printf("%s  Ready · %s\n", item.Name, item.Type)
+		fmt.Printf("└── path  %s\n", item.Path)
+		printLocalHarnesses(item)
+	}
+
+	if warning != "" {
+		fmt.Println("\nPVC (unavailable)")
+		fmt.Println(warning)
+		return
+	}
+	fmt.Printf("\nPVC (%d)\n", len(kubernetesItems))
+	if len(kubernetesItems) == 0 {
+		fmt.Println("None")
+		return
+	}
+	for index, item := range kubernetesItems {
+		if index > 0 {
+			fmt.Println()
+		}
+		fmt.Printf("%s  %s · %s\n", item.Name, displayStatus(item.Status), item.Type)
+		fmt.Printf("└── %s/%s  %s %s · %s · namespace %s\n",
+			strings.ToLower(item.Attachment.Kind), item.Attachment.ClaimName,
+			item.Storage.Size, shortMode(item.Storage.AccessMode),
+			storageClassName(item.Storage.StorageClass), item.Namespace)
+	}
+}
+
+func printLocalContexts(items []localcontext.Manifest, jsonOutput bool) {
+	if jsonOutput {
+		encoded, _ := json.MarshalIndent(items, "", "  ")
+		fmt.Println(string(encoded))
+		return
+	}
+	fmt.Printf("\nFILESYSTEM CONTEXTS (%d)\n", len(items))
+	if len(items) == 0 {
+		fmt.Println("None")
+		return
+	}
+	for _, item := range items {
+		printLocalContext(item, false)
+	}
+}
+
+func formatBytes(value int64) string {
+	const unit = 1024
+	if value < unit {
+		return fmt.Sprintf("%d B", value)
+	}
+	divisor, exponent := int64(unit), 0
+	for quotient := value / unit; quotient >= unit; quotient /= unit {
+		divisor *= unit
+		exponent++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(value)/float64(divisor), "KMGTPE"[exponent])
 }
 
 func removeContext(c *client.Client, args []string) error {
@@ -754,6 +1207,10 @@ Commands:
   create NAME          Create a named context
   list                 List named contexts
   get NAME             Show a named context
+  capture NAME         Capture a harness's native project state
+  restore NAME         Restore captured state into a project
+  attach NAME          Capture harness state automatically
+  detach NAME          Stop automatic capture for a project
   delete NAME          Delete a named context (alias: rm)
 
 Run "contextctl help context COMMAND" for command options.
@@ -765,17 +1222,78 @@ Run "contextctl help context COMMAND" for command options.
 			fmt.Print(`Usage: contextctl context create NAME [options]
 
 Options:
+  --backend BACKEND     pvc (default) or filesystem
   --namespace NAME      Kubernetes namespace (default CS_NAMESPACE or serverless-harness)
   --type TYPE           Context type (default workspace)
   --size SIZE           Storage size (default 1Gi)
   --storage-class NAME  Kubernetes storage class (default CS_STORAGE_CLASS)
   --access-mode MODE    ReadWriteOnce or ReadWriteMany (default ReadWriteOnce)
   --json                Print JSON
+
+Types:
+  workspace             Files used while an agent works
+  state                 Native harness sessions, memory files, and metadata
+  memory                Portable facts and summaries retained across sessions
+  knowledge             Reference and retrieval data
+  artifacts             Outputs produced by an agent
+
+Local state example:
+  contextctl ctx create demo --type state --backend filesystem
+  contextctl ctx attach demo --harness claude
 `)
 		case "list":
-			fmt.Print("Usage: contextctl context list [--namespace NAME] [--json]\n")
+			fmt.Print(`Usage: contextctl context list [options]
+
+List filesystem and Kubernetes contexts together by default.
+
+Options:
+  --backend BACKEND     all (default), pvc, or filesystem
+  --namespace NAME      Kubernetes namespace
+  --json                Print JSON
+`)
 		case "get":
-			fmt.Print("Usage: contextctl context get NAME [--namespace NAME] [--json]\n")
+			fmt.Print("Usage: contextctl context get NAME [--backend pvc|filesystem] [--namespace NAME] [--json]\n")
+		case "capture":
+			fmt.Print(`Usage: contextctl context capture NAME [options]
+
+Capture native Claude state for the current project into a filesystem context.
+
+Options:
+  --project PATH         Override the current project directory
+  --harness NAME         Agent harness (default claude)
+  --json                 Print JSON
+`)
+		case "attach":
+			fmt.Print(`Usage: contextctl context attach NAME [options]
+
+Attach a filesystem state context to the current project. State is captured automatically
+after completed responses; launch the harness normally.
+
+Options:
+  --project PATH         Override the current project directory
+  --harness NAME         claude, codex, opencode, or pi (default claude)
+  --json                 Print JSON
+`)
+		case "detach":
+			fmt.Print(`Usage: contextctl context detach NAME [options]
+
+Stop automatic capture and remove only Context Service's harness integration.
+
+Options:
+  --project PATH         Override the attached project directory
+  --harness NAME         claude, codex, opencode, or pi (default claude)
+  --json                 Print JSON
+`)
+		case "restore":
+			fmt.Print(`Usage: contextctl context restore NAME [options]
+
+Restore captured Claude state into the current project, which must have no existing state.
+
+Options:
+  --project PATH         Override the current destination project
+  --harness NAME         Agent harness (default claude)
+  --json                 Print JSON
+`)
 		case "delete", "rm":
 			fmt.Print("Usage: contextctl context delete NAME [--namespace NAME]\n")
 		default:

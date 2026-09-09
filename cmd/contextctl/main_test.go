@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -105,6 +108,165 @@ func TestCreateContextDefaults(t *testing.T) {
 		received.Storage.AccessMode != "ReadWriteOnce" || received.Storage.StorageClass != "local-path" {
 		t.Fatalf("unexpected storage request: %+v", received.Storage)
 	}
+}
+
+func TestLocalClaudeStateWorkflow(t *testing.T) {
+	root := t.TempDir()
+	contextHome := filepath.Join(root, "contexts")
+	claudeHome := filepath.Join(root, "claude")
+	sourceProject := filepath.Join(root, "source")
+	destinationProject := filepath.Join(root, "destination")
+	for _, dir := range []string{sourceProject, destinationProject} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sourceProject, _ = filepath.EvalSymlinks(sourceProject)
+	destinationProject, _ = filepath.EvalSymlinks(destinationProject)
+	t.Setenv("CS_CONTEXT_HOME", contextHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
+
+	if err := run([]string{"ctx", "create", "demo", "--type", "state", "--backend", "filesystem"}); err != nil {
+		t.Fatal(err)
+	}
+	sourceHistory := filepath.Join(claudeHome, "projects", strings.ReplaceAll(sourceProject, string(filepath.Separator), "-"))
+	if err := os.MkdirAll(filepath.Join(sourceHistory, "memory"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceHistory, "session.jsonl"), []byte(`{"type":"user"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceHistory, "memory", "MEMORY.md"), []byte("remember\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run([]string{"ctx", "capture", "demo", "--project", sourceProject}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"ctx", "restore", "demo", "--project", destinationProject}); err != nil {
+		t.Fatal(err)
+	}
+	destinationHistory := filepath.Join(claudeHome, "projects", strings.ReplaceAll(destinationProject, string(filepath.Separator), "-"))
+	if _, err := os.Stat(filepath.Join(destinationHistory, "session.jsonl")); err != nil {
+		t.Fatalf("restored transcript: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destinationHistory, "memory", "MEMORY.md")); err != nil {
+		t.Fatalf("restored memory: %v", err)
+	}
+}
+
+func TestLocalClaudeAttachAndSessionEndHook(t *testing.T) {
+	root := t.TempDir()
+	contextHome := filepath.Join(root, "contexts")
+	claudeHome := filepath.Join(root, "claude")
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CS_CONTEXT_HOME", contextHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
+	if err := run([]string{"ctx", "create", "demo", "--type", "state", "--backend", "filesystem"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"ctx", "attach", "demo", "--project", project}); err != nil {
+		t.Fatal(err)
+	}
+	history := filepath.Join(claudeHome, "projects", strings.ReplaceAll(project, string(filepath.Separator), "-"))
+	if err := os.MkdirAll(history, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(history, "session.jsonl")
+	if err := os.WriteFile(transcript, []byte(`{"type":"user","cwd":"`+project+`"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	input := `{"session_id":"abc123","transcript_path":"` + transcript + `","cwd":"` + project + `","hook_event_name":"SessionEnd","reason":"other"}`
+	if err := hookCommand([]string{"claude-capture", "--context", "demo", "--project", project}, strings.NewReader(input)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(contextHome, "demo", "harnesses", "claude", "project", "session.jsonl")); err != nil {
+		t.Fatalf("automatic capture: %v", err)
+	}
+	if err := run([]string{"ctx", "detach", "demo"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestContextListIncludesLocalAndKubernetesContexts(t *testing.T) {
+	t.Setenv("CS_CONTEXT_HOME", filepath.Join(t.TempDir(), "contexts"))
+	if err := run([]string{"ctx", "create", "local-demo", "--type", "state", "--backend", "filesystem"}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/namespaces/serverless-harness/contexts" {
+			t.Fatalf("unexpected request: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[{"name":"cluster-demo","namespace":"serverless-harness","type":"workspace","status":"ready","storage":{"backend":"pvc","size":"1Gi","accessMode":"ReadWriteOnce","storageClass":"standard"},"attachment":{"kind":"pvc","claimName":"context-cluster-demo"}}]}`))
+	}))
+	defer server.Close()
+
+	var listErr error
+	output := captureStdout(t, func() {
+		listErr = listContexts(client.New(server.URL, "", server.Client()), nil)
+	})
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	for _, expected := range []string{
+		"CONTEXTS",
+		"FILESYSTEM (1)",
+		"local-demo  Ready · state",
+		"PVC (1)",
+		"cluster-demo  Ready · workspace",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Errorf("list output missing %q:\n%s", expected, output)
+		}
+	}
+}
+
+func TestContextListShowsEmptyPVCBackend(t *testing.T) {
+	t.Setenv("CS_CONTEXT_HOME", filepath.Join(t.TempDir(), "contexts"))
+	if err := run([]string{"ctx", "create", "local-demo", "--type", "state", "--backend", "filesystem"}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[]}`))
+	}))
+	defer server.Close()
+
+	var listErr error
+	output := captureStdout(t, func() {
+		listErr = listContexts(client.New(server.URL, "", server.Client()), nil)
+	})
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	for _, expected := range []string{"FILESYSTEM (1)", "PVC (0)", "None"} {
+		if !strings.Contains(output, expected) {
+			t.Errorf("list output missing %q:\n%s", expected, output)
+		}
+	}
+}
+
+func captureStdout(t *testing.T, action func()) string {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := os.Stdout
+	os.Stdout = writer
+	action()
+	_ = writer.Close()
+	os.Stdout = original
+	output, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(output)
 }
 
 func TestContextCommandRequiresSubcommand(t *testing.T) {
