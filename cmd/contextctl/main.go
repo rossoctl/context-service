@@ -282,6 +282,8 @@ func contextCommand(c *client.Client, args []string) error {
 		return queryContext(c, args[1:])
 	case "artifact", "artifacts":
 		return artifactCommand(args[1:])
+	case "graph":
+		return graphContext(c, args[1:])
 	case "revisions":
 		return revisionsContext(c, args[1:])
 	case "snapshot", "snapshots":
@@ -1658,6 +1660,7 @@ Commands:
   search NAME QUERY    Search a local knowledge context
   query QUERY          Query memory and knowledge contexts
   artifact COMMAND     Publish, list, and retrieve immutable artifacts
+  graph                Show sources, derivatives, consumers, and copies
   revisions NAME       Show local revision history
   snapshot COMMAND     Snapshot, clone, restore, and retain local context
   lineage NAME         Show derivation sources and availability
@@ -1709,6 +1712,16 @@ Options:
 `)
 		case "get":
 			fmt.Print("Usage: contextctl context get NAME [--backend pvc|filesystem] [--namespace NAME] [--json]\n")
+		case "graph":
+			fmt.Print(`Usage: contextctl context graph [options]
+
+Show context sources, derivatives, consumers, and storage copies.
+
+Options:
+  --backend BACKEND     all (default), pvc, or filesystem
+  --namespace NAME      Kubernetes namespace
+  --json                Print JSON
+`)
 		case "revisions":
 			fmt.Print("Usage: contextctl context revisions NAME [--backend pvc|filesystem] [--namespace NAME] [--json]\n")
 		case "snapshot", "snapshots":

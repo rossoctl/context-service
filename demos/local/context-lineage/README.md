@@ -15,6 +15,12 @@ contextctl ctx revisions demo-memory
 contextctl ctx lineage demo-memory
 ```
 
+See the complete state → memory → knowledge relationship, attached harnesses, and storage copies:
+
+```sh
+contextctl ctx graph
+```
+
 Run another agent response in the attached project, then generate memory under a new name. The new
 memory points to the new state revision while the earlier provenance remains unchanged.
 
