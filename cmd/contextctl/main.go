@@ -594,19 +594,52 @@ func syncContext(c *client.Client, args []string) error {
 func pushContext(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context sync push", flag.ContinueOnError)
 	remoteName := flags.String("remote-name", "", "remote context name (default local name)")
+	target := flags.String("to", "", "S3 destination (s3://bucket/prefix)")
 	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
 	image := flags.String("helper-image", "busybox:1.36", "temporary transfer Pod image")
+	s3Endpoint := flags.String("s3-endpoint", os.Getenv("CS_S3_ENDPOINT"), "S3-compatible endpoint")
+	s3Region := flags.String("s3-region", envOr("CS_S3_REGION", envOr("AWS_REGION", "us-east-1")), "S3 region")
 	flags.Usage = func() { showHelp([]string{"context", "sync", "push"}) }
 	name, err := parseContextName(flags, args)
 	if err != nil {
 		return err
 	}
-	if *remoteName == "" {
-		*remoteName = name
-	}
 	local, err := localContextStore().Get(name)
 	if err != nil {
 		return err
+	}
+	if *target != "" {
+		if *remoteName != "" {
+			return errors.New("--to cannot be combined with --remote-name")
+		}
+		location, err := contextsync.ParseS3Location(*target)
+		if err != nil {
+			return err
+		}
+		temporary, err := os.MkdirTemp("", "contextctl-sync-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(temporary)
+		bundlePath := filepath.Join(temporary, name+".context")
+		bundle, err := localContextStore().Export(name, bundlePath)
+		if err != nil {
+			return err
+		}
+		transport, err := contextsync.NewS3(context.Background(), *s3Region, *s3Endpoint)
+		if err != nil {
+			return err
+		}
+		transport.SetProgress(newTransferProgress(os.Stderr).Update)
+		if _, err := transport.Push(context.Background(), location, bundlePath); err != nil {
+			return err
+		}
+		fmt.Printf("Synced %s to %s\n", name, location)
+		fmt.Printf("Files: %d (%s)\n", bundle.Files, formatBytes(bundle.Bytes))
+		return nil
+	}
+	if *remoteName == "" {
+		*remoteName = name
 	}
 	remote, err := c.GetContext(context.Background(), *namespace, *remoteName)
 	if err != nil {
@@ -652,12 +685,27 @@ func pullContext(c *client.Client, args []string) error {
 	name := flags.String("name", "", "local context name (default remote name)")
 	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
 	image := flags.String("helper-image", "busybox:1.36", "temporary transfer Pod image")
+	s3Endpoint := flags.String("s3-endpoint", os.Getenv("CS_S3_ENDPOINT"), "S3-compatible endpoint")
+	s3Region := flags.String("s3-region", envOr("CS_S3_REGION", envOr("AWS_REGION", "us-east-1")), "S3 region")
 	flags.Usage = func() { showHelp([]string{"context", "sync", "pull"}) }
 	remoteName, err := parseContextName(flags, args)
 	if err != nil {
 		return err
 	}
-	if *name == "" {
+	var s3Location *contextsync.S3Location
+	if strings.HasPrefix(remoteName, "s3://") {
+		location, err := contextsync.ParseS3Location(remoteName)
+		if err != nil {
+			return err
+		}
+		s3Location = &location
+		if *name == "" {
+			*name = filepath.Base(location.Prefix)
+			if *name == "." || *name == "/" || *name == "" {
+				return errors.New("--name is required when pulling from an S3 bucket root")
+			}
+		}
+	} else if *name == "" {
 		*name = remoteName
 	}
 	store := localContextStore()
@@ -665,6 +713,29 @@ func pullContext(c *client.Client, args []string) error {
 		return fmt.Errorf("local context %s: %w", *name, localcontext.ErrAlreadyExists)
 	} else if !errors.Is(err, localcontext.ErrNotFound) {
 		return err
+	}
+	if s3Location != nil {
+		temporary, err := os.MkdirTemp("", "contextctl-sync-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(temporary)
+		bundlePath := filepath.Join(temporary, *name+".context")
+		transport, err := contextsync.NewS3(context.Background(), *s3Region, *s3Endpoint)
+		if err != nil {
+			return err
+		}
+		transport.SetProgress(newTransferProgress(os.Stderr).Update)
+		if err := transport.Pull(context.Background(), *s3Location, bundlePath); err != nil {
+			return err
+		}
+		manifest, err := store.Import(bundlePath, *name)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Synced %s to local context %s\n", s3Location, manifest.Name)
+		printLocalContext(manifest, false)
+		return nil
 	}
 	remote, err := c.GetContext(context.Background(), *namespace, remoteName)
 	if err != nil {
@@ -1461,7 +1532,7 @@ Commands:
   detach NAME          Stop automatic capture for a project
   export NAME          Write a portable .context bundle
   import FILE          Import a portable .context bundle
-  sync push|pull       Transfer state between local and PVC contexts
+  sync push|pull       Transfer state between local and remote storage
   delete NAME          Delete a named context (alias: rm)
 
 Run "contextctl help context COMMAND" for command options.
@@ -1565,10 +1636,9 @@ Options:
 `)
 		case "sync":
 			if len(args) == 2 {
-				fmt.Print(`Usage: contextctl context sync push|pull NAME [options]
+				fmt.Print(`Usage: contextctl context sync push|pull SOURCE [options]
 
-Transfer a portable context bundle between the local store and a Context Service PVC.
-The current kubectl context must point to the same cluster as Context Service.
+Transfer a portable context bundle between the local store and a Context Service PVC or S3.
 `)
 				return
 			}
@@ -1578,16 +1648,21 @@ The current kubectl context must point to the same cluster as Context Service.
 
 Options:
   --remote-name NAME     Remote context name (default LOCAL_NAME)
+  --to S3_URL            S3 destination (s3://bucket/prefix)
   --namespace NAME       Kubernetes namespace
   --helper-image IMAGE   Temporary transfer Pod image (default busybox:1.36)
+  --s3-endpoint URL      S3-compatible endpoint (default CS_S3_ENDPOINT)
+  --s3-region REGION     S3 region (default CS_S3_REGION, AWS_REGION, or us-east-1)
 `)
 			case "pull":
-				fmt.Print(`Usage: contextctl context sync pull REMOTE_NAME [options]
+				fmt.Print(`Usage: contextctl context sync pull REMOTE_NAME|S3_URL [options]
 
 Options:
   --name NAME            Local context name (default REMOTE_NAME)
   --namespace NAME       Kubernetes namespace
   --helper-image IMAGE   Temporary transfer Pod image (default busybox:1.36)
+  --s3-endpoint URL      S3-compatible endpoint (default CS_S3_ENDPOINT)
+  --s3-region REGION     S3 region (default CS_S3_REGION, AWS_REGION, or us-east-1)
 `)
 			default:
 				fmt.Printf("Unknown sync direction %q.\n", args[2])
