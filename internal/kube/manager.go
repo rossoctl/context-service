@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/pool"
@@ -191,6 +192,10 @@ func (m *Manager) PublishContextRevision(ctx context.Context, namespace, name st
 }
 
 func (m *Manager) DeleteContext(ctx context.Context, namespace, name string) error {
+	return m.deleteContext(ctx, namespace, name, false)
+}
+
+func (m *Manager) deleteContext(ctx context.Context, namespace, name string, force bool) error {
 	pvc, err := m.core.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, contextPVCName(name), metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return contextresource.ErrNotFound
@@ -200,6 +205,19 @@ func (m *Manager) DeleteContext(ctx context.Context, namespace, name string) err
 	}
 	if pvc.Labels[managedLabel] != managedBy || pvc.Labels[contextLabel] != name {
 		return contextresource.ErrNotFound
+	}
+	if !force {
+		consumers, err := m.ListContextConsumers(ctx, namespace, name)
+		if err != nil {
+			return err
+		}
+		if len(consumers) > 0 {
+			names := make([]string, 0, len(consumers))
+			for _, consumer := range consumers {
+				names = append(names, consumer.Kind+"/"+consumer.Name)
+			}
+			return fmt.Errorf("%w: %s is used by %s; detach consumers or use force deletion", contextresource.ErrInUse, name, strings.Join(names, ", "))
+		}
 	}
 	if err := m.core.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, pvc.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete context PVC: %w", err)

@@ -153,3 +153,19 @@ func TestAPIError(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestClientSendsContextSubject(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Context-Subject"); got != "agent:researcher" {
+			t.Fatalf("subject header = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[]}`))
+	}))
+	defer server.Close()
+	c := New(server.URL, "", server.Client())
+	c.SetSubject("agent:researcher")
+	if _, err := c.ListContexts(context.Background(), "team1"); err != nil {
+		t.Fatal(err)
+	}
+}
