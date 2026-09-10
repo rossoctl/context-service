@@ -15,7 +15,7 @@ import (
 // its contents. The harness adapter owns the format; Context Service owns its
 // durable placement and inventory metadata.
 func (s *Store) CaptureSessionFile(name, harness, projectPath, sessionID, source string) (Capture, string, error) {
-	manifest, err := s.Get(name)
+	_, err := s.Get(name)
 	if err != nil {
 		return Capture{}, "", err
 	}
@@ -45,6 +45,10 @@ func (s *Store) CaptureSessionFile(name, harness, projectPath, sessionID, source
 		return Capture{}, "", err
 	}
 	defer unlock()
+	manifest, err := s.Get(name)
+	if err != nil {
+		return Capture{}, "", err
+	}
 	destinationDir := filepath.Join(s.contextDir(name), "harnesses", harness, "sessions")
 	if err := os.MkdirAll(destinationDir, 0o700); err != nil {
 		return Capture{}, "", err
@@ -63,7 +67,7 @@ func (s *Store) CaptureSessionFile(name, harness, projectPath, sessionID, source
 
 // CaptureSessionExport stores a stable harness export received over stdout.
 func (s *Store) CaptureSessionExport(name, harness, projectPath, sessionID string, input io.Reader) (Capture, string, error) {
-	manifest, err := s.Get(name)
+	_, err := s.Get(name)
 	if err != nil {
 		return Capture{}, "", err
 	}
@@ -90,6 +94,10 @@ func (s *Store) CaptureSessionExport(name, harness, projectPath, sessionID strin
 		return Capture{}, "", err
 	}
 	defer unlock()
+	manifest, err := s.Get(name)
+	if err != nil {
+		return Capture{}, "", err
+	}
 	destinationDir := filepath.Join(s.contextDir(name), "harnesses", harness, "sessions")
 	if err := os.MkdirAll(destinationDir, 0o700); err != nil {
 		return Capture{}, "", err
@@ -137,6 +145,9 @@ func (s *Store) updateSessionCapture(manifest Manifest, harness, project, direct
 		Sessions: files, Files: files, Bytes: bytes,
 	}
 	manifest.Captures[harness] = capture
+	if _, err := s.recordRevisionUnlocked(&manifest, RevisionMetadata{Operation: "capture", Producer: harness}); err != nil {
+		return Capture{}, err
+	}
 	if err := s.writeManifest(manifest); err != nil {
 		return Capture{}, err
 	}

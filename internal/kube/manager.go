@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/retry"
 )
 
 const (
@@ -55,18 +57,20 @@ func (m *Manager) ListStorageClasses(ctx context.Context) ([]storageclass.Resour
 }
 
 const (
-	poolLabel          = "context.rossoctl.io/pool"
-	managedLabel       = "app.kubernetes.io/managed-by"
-	managedBy          = "context-service"
-	replicasLabel      = "context.rossoctl.io/replicas"
-	workspaceName      = "workspace"
-	workspaceMount     = "/workspace"
-	claimAnnotation    = "context.rossoctl.io/workspace-claim"
-	readOnlyAnnotation = "context.rossoctl.io/workspace-read-only"
-	replicasAnnotation = "context.rossoctl.io/replicas"
-	profileAnnotation  = "context.rossoctl.io/sandbox-profile"
-	contextLabel       = "context.rossoctl.io/name"
-	contextTypeLabel   = "context.rossoctl.io/type"
+	poolLabel                 = "context.rossoctl.io/pool"
+	managedLabel              = "app.kubernetes.io/managed-by"
+	managedBy                 = "context-service"
+	replicasLabel             = "context.rossoctl.io/replicas"
+	workspaceName             = "workspace"
+	workspaceMount            = "/workspace"
+	claimAnnotation           = "context.rossoctl.io/workspace-claim"
+	readOnlyAnnotation        = "context.rossoctl.io/workspace-read-only"
+	replicasAnnotation        = "context.rossoctl.io/replicas"
+	profileAnnotation         = "context.rossoctl.io/sandbox-profile"
+	contextLabel              = "context.rossoctl.io/name"
+	contextTypeLabel          = "context.rossoctl.io/type"
+	currentRevisionAnnotation = "context.rossoctl.io/current-revision"
+	revisionsAnnotation       = "context.rossoctl.io/revisions"
 )
 
 var sandboxResource = schema.GroupVersionResource{
@@ -125,14 +129,65 @@ func resourceFromContextPVC(pvc *corev1.PersistentVolumeClaim) contextresource.R
 	if pvc.Status.Phase == corev1.ClaimBound {
 		status = "ready"
 	}
+	var revisions []contextresource.Revision
+	if encoded := pvc.Annotations[revisionsAnnotation]; encoded != "" {
+		_ = json.Unmarshal([]byte(encoded), &revisions)
+	}
 	return contextresource.Resource{
 		Name: pvc.Labels[contextLabel], Namespace: pvc.Namespace, Type: pvc.Labels[contextTypeLabel], Status: status,
 		Storage: contextresource.Storage{
 			Backend: "pvc", Size: pvc.Spec.Resources.Requests.Storage().String(),
 			AccessMode: string(pvc.Spec.AccessModes[0]), StorageClass: storageClass,
 		},
-		Attachment: contextresource.Attachment{Kind: "pvc", ClaimName: pvc.Name},
+		Attachment:      contextresource.Attachment{Kind: "pvc", ClaimName: pvc.Name},
+		CurrentRevision: pvc.Annotations[currentRevisionAnnotation], Revisions: revisions,
 	}
+}
+
+func (m *Manager) PublishContextRevision(ctx context.Context, namespace, name string, revision contextresource.Revision) (contextresource.Resource, error) {
+	var result contextresource.Resource
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		pvc, err := m.core.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, contextPVCName(name), metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return contextresource.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if pvc.Labels[managedLabel] != managedBy || pvc.Labels[contextLabel] != name {
+			return contextresource.ErrNotFound
+		}
+		var revisions []contextresource.Revision
+		if encoded := pvc.Annotations[revisionsAnnotation]; encoded != "" {
+			if err := json.Unmarshal([]byte(encoded), &revisions); err != nil {
+				return fmt.Errorf("read context revision history: %w", err)
+			}
+		}
+		if pvc.Annotations[currentRevisionAnnotation] != revision.ID {
+			revisions = append(revisions, revision)
+		}
+		encoded, err := json.Marshal(revisions)
+		if err != nil {
+			return err
+		}
+		if pvc.Annotations == nil {
+			pvc.Annotations = map[string]string{}
+		}
+		pvc.Annotations[currentRevisionAnnotation] = revision.ID
+		pvc.Annotations[revisionsAnnotation] = string(encoded)
+		updated, err := m.core.CoreV1().PersistentVolumeClaims(namespace).Update(ctx, pvc, metav1.UpdateOptions{})
+		if err == nil {
+			result = resourceFromContextPVC(updated)
+		}
+		return err
+	})
+	if errors.Is(err, contextresource.ErrNotFound) {
+		return contextresource.Resource{}, err
+	}
+	if err != nil {
+		return contextresource.Resource{}, fmt.Errorf("publish context revision: %w", err)
+	}
+	return result, nil
 }
 
 func (m *Manager) DeleteContext(ctx context.Context, namespace, name string) error {

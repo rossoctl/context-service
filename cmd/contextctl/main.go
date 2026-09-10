@@ -276,6 +276,10 @@ func contextCommand(c *client.Client, args []string) error {
 		return deriveContext(args[1:])
 	case "search":
 		return searchContext(args[1:])
+	case "revisions":
+		return revisionsContext(c, args[1:])
+	case "lineage":
+		return lineageContext(args[1:])
 	default:
 		return fmt.Errorf("unknown context command %q; run 'contextctl help context'", args[0])
 	}
@@ -620,6 +624,15 @@ func pushContextWithContext(ctx context.Context, c *client.Client, args []string
 	if err != nil {
 		return err
 	}
+	if local.CurrentRevision == "" {
+		if _, err := localContextStore().PublishRevision(name, localcontext.RevisionMetadata{Operation: "sync", Producer: "contextctl"}); err != nil {
+			return err
+		}
+		local, err = localContextStore().Get(name)
+		if err != nil {
+			return err
+		}
+	}
 	if *target != "" {
 		if *remoteName != "" {
 			return errors.New("--to cannot be combined with --remote-name")
@@ -686,6 +699,12 @@ func pushContextWithContext(ctx context.Context, c *client.Client, args []string
 	transport.SetProgress(newTransferProgress(os.Stderr).Update)
 	if err := transport.Push(ctx, remote.Namespace, remote.Attachment.ClaimName, bundlePath); err != nil {
 		return err
+	}
+	if len(local.Revisions) == 0 {
+		return errors.New("local context has no published revision")
+	}
+	if _, err := c.PublishContextRevision(ctx, remote.Namespace, *remoteName, resourceRevision(local.Revisions[len(local.Revisions)-1])); err != nil {
+		return fmt.Errorf("publish remote revision: %w", err)
 	}
 	fmt.Printf("Synced %s to pvc/%s in namespace %s\n", name, remote.Attachment.ClaimName, remote.Namespace)
 	fmt.Printf("Files: %d (%s)\n", bundle.Files, formatBytes(bundle.Bytes))
@@ -955,6 +974,9 @@ func printLocalContext(value localcontext.Manifest, jsonOutput bool) {
 }
 
 func printLocalDerivation(value localcontext.Manifest) {
+	if value.CurrentRevision != "" {
+		fmt.Printf("    └── revision  %s\n", shortRevision(value.CurrentRevision))
+	}
 	if value.Type == "memory" {
 		fmt.Printf("    └── memory  %s\n", memoryPath(value))
 	}
@@ -1027,6 +1049,9 @@ func printContextInventory(localItems []localcontext.Manifest, kubernetesItems [
 			strings.ToLower(item.Attachment.Kind), item.Attachment.ClaimName,
 			item.Storage.Size, shortMode(item.Storage.AccessMode),
 			storageClassName(item.Storage.StorageClass), item.Namespace)
+		if item.CurrentRevision != "" {
+			fmt.Printf("    └── revision  %s\n", shortRevision(item.CurrentRevision))
+		}
 	}
 }
 
@@ -1580,6 +1605,8 @@ Commands:
   derive memory        Generate durable memory from captured state
   derive knowledge     Build searchable knowledge from state or memory
   search NAME QUERY    Search a local knowledge context
+  revisions NAME       Show local revision history
+  lineage NAME         Show derivation sources and availability
   delete NAME          Delete a named context (alias: rm)
 
 Run "contextctl help context COMMAND" for command options.
@@ -1622,6 +1649,10 @@ Options:
 `)
 		case "get":
 			fmt.Print("Usage: contextctl context get NAME [--backend pvc|filesystem] [--namespace NAME] [--json]\n")
+		case "revisions":
+			fmt.Print("Usage: contextctl context revisions NAME [--backend pvc|filesystem] [--namespace NAME] [--json]\n")
+		case "lineage":
+			fmt.Print("Usage: contextctl context lineage NAME [--json]\n")
 		case "capture":
 			fmt.Print(`Usage: contextctl context capture NAME [options]
 

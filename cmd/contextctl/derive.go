@@ -73,7 +73,11 @@ func deriveMemory(args []string) error {
 	if err != nil {
 		return err
 	}
-	manifest, err := store.CreateDerivedMemory(*name, source, generator, output)
+	parameters := map[string]string{"agent": *agent, "maxInputBytes": fmt.Sprint(*maxInput)}
+	if *model != "" {
+		parameters["model"] = *model
+	}
+	manifest, err := store.CreateDerivedMemory(*name, source, generator, output, parameters)
 	if err != nil {
 		return err
 	}
@@ -278,7 +282,11 @@ func deriveKnowledge(args []string) error {
 		}
 	}
 	sort.Strings(generatorNames)
-	manifest, err := store.WriteKnowledge(*name, sources, strings.Join(generatorNames, ","), records)
+	parameters := map[string]string{"agent": *agent, "maxInputBytes": fmt.Sprint(*maxInput)}
+	if *model != "" {
+		parameters["model"] = *model
+	}
+	manifest, err := store.WriteKnowledge(*name, sources, strings.Join(generatorNames, ","), records, parameters)
 	if err != nil {
 		return err
 	}

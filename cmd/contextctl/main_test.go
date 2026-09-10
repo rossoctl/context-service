@@ -260,6 +260,39 @@ func TestContextExportImport(t *testing.T) {
 	}
 }
 
+func TestContextRevisionsListsCapturedHistory(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "contexts")
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CS_CONTEXT_HOME", home)
+	store := localcontext.New(home)
+	if _, err := store.Create("demo", "state"); err != nil {
+		t.Fatal(err)
+	}
+	session := filepath.Join(root, "session.jsonl")
+	if err := os.WriteFile(session, []byte("captured\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.CaptureSessionFile("demo", "codex", project, "session-1", session); err != nil {
+		t.Fatal(err)
+	}
+	var revisionsErr error
+	output := captureStdout(t, func() {
+		revisionsErr = revisionsContext(nil, []string{"demo"})
+	})
+	if revisionsErr != nil {
+		t.Fatal(revisionsErr)
+	}
+	for _, expected := range []string{"REVISIONS (1)", "capture", "codex", "current"} {
+		if !strings.Contains(output, expected) {
+			t.Errorf("revision output missing %q:\n%s", expected, output)
+		}
+	}
+}
+
 func TestContextSyncPushRejectsTypeMismatchBeforeTransfer(t *testing.T) {
 	t.Setenv("CS_CONTEXT_HOME", filepath.Join(t.TempDir(), "contexts"))
 	if err := run([]string{"ctx", "create", "local-state", "--type", "state", "--backend", "filesystem"}); err != nil {

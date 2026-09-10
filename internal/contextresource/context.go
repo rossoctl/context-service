@@ -3,6 +3,7 @@ package contextresource
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 var (
@@ -31,12 +32,35 @@ type Attachment struct {
 }
 
 type Resource struct {
-	Name       string     `json:"name"`
-	Namespace  string     `json:"namespace"`
-	Type       string     `json:"type"`
-	Status     string     `json:"status"`
-	Storage    Storage    `json:"storage"`
-	Attachment Attachment `json:"attachment"`
+	Name            string     `json:"name"`
+	Namespace       string     `json:"namespace"`
+	Type            string     `json:"type"`
+	Status          string     `json:"status"`
+	Storage         Storage    `json:"storage"`
+	Attachment      Attachment `json:"attachment"`
+	CurrentRevision string     `json:"currentRevision,omitempty"`
+	Revisions       []Revision `json:"revisions,omitempty"`
+}
+
+type SourceReference struct {
+	Context  string `json:"context"`
+	Type     string `json:"type"`
+	Revision string `json:"revision"`
+}
+
+type Revision struct {
+	ID         string            `json:"id"`
+	CreatedAt  time.Time         `json:"createdAt"`
+	Operation  string            `json:"operation"`
+	Producer   string            `json:"producer,omitempty"`
+	Parameters map[string]string `json:"parameters,omitempty"`
+	Sources    []SourceReference `json:"sources,omitempty"`
+	Files      int               `json:"files"`
+	Bytes      int64             `json:"bytes"`
+}
+
+type RevisionList struct {
+	Items []Revision `json:"items"`
 }
 
 type List struct {
@@ -48,4 +72,5 @@ type Manager interface {
 	ListContexts(context.Context, string) ([]Resource, error)
 	GetContext(context.Context, string, string) (Resource, error)
 	DeleteContext(context.Context, string, string) error
+	PublishContextRevision(context.Context, string, string, Revision) (Resource, error)
 }

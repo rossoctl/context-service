@@ -83,6 +83,18 @@ func (c *Client) DeleteContext(ctx context.Context, namespace, name string) erro
 	return c.do(ctx, http.MethodDelete, "/v1/namespaces/"+url.PathEscape(namespace)+"/contexts/"+url.PathEscape(name), nil, nil)
 }
 
+func (c *Client) ListContextRevisions(ctx context.Context, namespace, name string) ([]contextresource.Revision, error) {
+	var result contextresource.RevisionList
+	err := c.do(ctx, http.MethodGet, "/v1/namespaces/"+url.PathEscape(namespace)+"/contexts/"+url.PathEscape(name)+"/revisions", nil, &result)
+	return result.Items, err
+}
+
+func (c *Client) PublishContextRevision(ctx context.Context, namespace, name string, revision contextresource.Revision) (contextresource.Resource, error) {
+	var result contextresource.Resource
+	err := c.do(ctx, http.MethodPost, "/v1/namespaces/"+url.PathEscape(namespace)+"/contexts/"+url.PathEscape(name)+"/revisions", revision, &result)
+	return result, err
+}
+
 func (c *Client) do(ctx context.Context, method, path string, input, output any) error {
 	var body io.Reader
 	if input != nil {

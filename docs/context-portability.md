@@ -13,7 +13,7 @@ Service storage.
 
 Machine-specific attachments and paths are not used to attach the imported context. Import verifies
 the inventory, rejects unsafe archive entries, and installs into a new context without overwriting an
-existing one.
+existing one. Revision history and derivation provenance remain part of the portable manifest.
 
 ```text
 ~/.contexts/demo                 demo.context                 another machine
@@ -38,6 +38,9 @@ local context → .context bundle → Kubernetes Pod proxy → temporary helper 
 Objects are named by content hash. `current` is replaced atomically only after upload verification.
 Concurrent uploads use separate temporary paths. Pull reads the current revision, verifies it
 locally, and imports it without replacing an existing local context.
+
+After a verified PVC push, `contextctl` also publishes the portable content revision to Context
+Service. The context API can therefore report revision history without mounting the PVC.
 
 The transport requires `kubectl` access to the cluster hosting the PVC, including permission to
 create and delete helper Pods and use Pod exec and proxy endpoints. It moves captured state; it does
