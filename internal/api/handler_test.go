@@ -83,7 +83,7 @@ func TestCreateWorkspaceContext(t *testing.T) {
 }
 
 func TestCreateContextAcceptsSupportedTypes(t *testing.T) {
-	for _, contextType := range []string{"workspace", "memory", "knowledge", "artifacts"} {
+	for _, contextType := range []string{"workspace", "state", "memory", "knowledge", "artifacts"} {
 		t.Run(contextType, func(t *testing.T) {
 			manager := &fakeManager{}
 			body := []byte(`{"name":"research","namespace":"team1","type":"` + contextType + `","storage":{"backend":"pvc","size":"1Gi","accessMode":"ReadWriteOnce"}}`)

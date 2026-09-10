@@ -51,9 +51,10 @@ does not claim whether a class supports `ReadWriteOnce` or `ReadWriteMany`.
 ## Named context resources
 
 Named resources let an integration provision storage independently from sandbox capacity. The
-initial implementation supports four classifications over the same PVC-backed contract:
-`workspace`, `memory`, `knowledge`, and `artifacts`. Classification is metadata today; it does not
-yet change provisioning or lifecycle semantics.
+initial implementation supports five classifications over the same PVC-backed contract:
+`workspace`, `state`, `memory`, `knowledge`, and `artifacts`. Classification is metadata today; it
+does not yet change provisioning or lifecycle semantics. `state` contains native harness data;
+`memory` is reserved for portable facts and summaries retained across sessions.
 
 ```json
 {

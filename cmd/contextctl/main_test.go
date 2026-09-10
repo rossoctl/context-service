@@ -10,9 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rossoctl/context-service/internal/client"
 	"github.com/rossoctl/context-service/internal/contextresource"
+	"github.com/rossoctl/context-service/internal/contextsync"
+	"github.com/rossoctl/context-service/internal/localcontext"
 	"github.com/rossoctl/context-service/internal/pool"
 )
 
@@ -25,6 +28,25 @@ func TestHelpDefinesCoreConcepts(t *testing.T) {
 	} {
 		if !strings.Contains(help, expected) {
 			t.Errorf("help missing %q:\n%s", expected, help)
+		}
+	}
+}
+
+func TestTransferProgressNonInteractivePrintsFinalStats(t *testing.T) {
+	var output bytes.Buffer
+	progress := newTransferProgress(&output)
+	progress.Update(contextsync.Progress{
+		Direction: "upload", Transferred: 512, Total: 1024, Elapsed: time.Second,
+	})
+	if output.Len() != 0 {
+		t.Fatalf("non-interactive progress printed an intermediate update: %q", output.String())
+	}
+	progress.Update(contextsync.Progress{
+		Direction: "upload", Transferred: 1024, Total: 1024, Elapsed: 2 * time.Second, Done: true,
+	})
+	for _, expected := range []string{"Uploading", "100%", "1.0 KiB / 1.0 KiB", "512 B/s", "00:02"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("progress output missing %q: %q", expected, output.String())
 		}
 	}
 }
@@ -188,6 +210,62 @@ func TestLocalClaudeAttachAndSessionEndHook(t *testing.T) {
 	}
 	if err := run([]string{"ctx", "detach", "demo"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestContextExportImport(t *testing.T) {
+	root := t.TempDir()
+	sourceHome := filepath.Join(root, "source-contexts")
+	destinationHome := filepath.Join(root, "destination-contexts")
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CS_CONTEXT_HOME", sourceHome)
+	if err := run([]string{"ctx", "create", "demo", "--type", "state", "--backend", "filesystem"}); err != nil {
+		t.Fatal(err)
+	}
+	session := filepath.Join(root, "session.jsonl")
+	if err := os.WriteFile(session, []byte(`{"message":"portable"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := localcontext.New(sourceHome).CaptureSessionFile("demo", "codex", project, "session-1", session); err != nil {
+		t.Fatal(err)
+	}
+	bundlePath := filepath.Join(root, "demo.context")
+	if err := run([]string{"ctx", "export", "demo", "--output", bundlePath}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CS_CONTEXT_HOME", destinationHome)
+	if err := run([]string{"ctx", "import", bundlePath, "--name", "copy"}); err != nil {
+		t.Fatal(err)
+	}
+	files, err := localcontext.New(destinationHome).SessionFiles("copy", "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("imported session count = %d, want 1", len(files))
+	}
+}
+
+func TestContextSyncPushRejectsTypeMismatchBeforeTransfer(t *testing.T) {
+	t.Setenv("CS_CONTEXT_HOME", filepath.Join(t.TempDir(), "contexts"))
+	if err := run([]string{"ctx", "create", "local-state", "--type", "state", "--backend", "filesystem"}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/namespaces/serverless-harness/contexts/remote-workspace" {
+			t.Fatalf("unexpected request: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"remote-workspace","namespace":"serverless-harness","type":"workspace","status":"ready","storage":{"backend":"pvc","size":"1Gi","accessMode":"ReadWriteOnce","storageClass":"standard"},"attachment":{"kind":"pvc","claimName":"context-remote-workspace"}}`))
+	}))
+	defer server.Close()
+
+	err := pushContext(client.New(server.URL, "", server.Client()), []string{"local-state", "--remote-name", "remote-workspace"})
+	if err == nil || !strings.Contains(err.Error(), "context type mismatch") {
+		t.Fatalf("push error = %v, want type mismatch", err)
 	}
 }
 
