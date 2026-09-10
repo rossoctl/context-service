@@ -43,6 +43,21 @@ The transport requires `kubectl` access to the cluster hosting the PVC, includin
 create and delete helper Pods and use Pod exec and proxy endpoints. It moves captured state; it does
 not unpack or attach that state inside a remote agent.
 
+## S3 sync
+
+S3 sync uses the same content-addressed layout under an explicit `s3://bucket/prefix` location:
+
+```text
+s3://contexts/team/demo/.context-service/
+├── current
+└── objects/<sha256>.context
+```
+
+Push uploads and reads back the immutable object to verify its size and SHA-256 before replacing
+`current`. Pull verifies the current object before importing it. Standard AWS credentials are used;
+credentials are never stored in context manifests or bundles. Set `CS_S3_ENDPOINT` to use MinIO or
+another S3-compatible service. Custom endpoints use path-style bucket addressing.
+
 ## Commands
 
 Export or import a local filesystem context:
@@ -58,6 +73,13 @@ Push a local filesystem context to a PVC context, or pull its current revision:
 contextctl ctx create cloud-demo --type state
 contextctl ctx sync push demo --remote-name cloud-demo
 contextctl ctx sync pull cloud-demo --name downloaded-demo
+```
+
+Push or pull through S3-compatible object storage:
+
+```sh
+contextctl ctx sync push demo --to s3://contexts/team/demo
+contextctl ctx sync pull s3://contexts/team/demo --name downloaded-demo
 ```
 
 Push and pull are explicit operations. Sync does not run continuously in the background.
