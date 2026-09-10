@@ -12,11 +12,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
 	"github.com/rossoctl/context-service/internal/client"
 	"github.com/rossoctl/context-service/internal/contextresource"
+	"github.com/rossoctl/context-service/internal/contextsync"
 	"github.com/rossoctl/context-service/internal/localcontext"
 	"github.com/rossoctl/context-service/internal/pool"
 	"github.com/rossoctl/context-service/internal/storageclass"
@@ -262,6 +264,12 @@ func contextCommand(c *client.Client, args []string) error {
 		return attachContext(args[1:])
 	case "detach":
 		return detachContext(args[1:])
+	case "export":
+		return exportContext(args[1:])
+	case "import":
+		return importContext(args[1:])
+	case "sync":
+		return syncContext(c, args[1:])
 	default:
 		return fmt.Errorf("unknown context command %q; run 'contextctl help context'", args[0])
 	}
@@ -522,6 +530,174 @@ func detachContext(args []string) error {
 	return nil
 }
 
+func exportContext(args []string) error {
+	flags := flag.NewFlagSet("context export", flag.ContinueOnError)
+	output := flags.String("output", "", "output .context file")
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	flags.Usage = func() { showHelp([]string{"context", "export"}) }
+	name, err := parseContextName(flags, args)
+	if err != nil {
+		return err
+	}
+	bundle, err := localContextStore().Export(name, *output)
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		encoded, _ := json.MarshalIndent(bundle, "", "  ")
+		fmt.Println(string(encoded))
+		return nil
+	}
+	fmt.Printf("Exported %s to %s\n", name, bundle.File)
+	fmt.Printf("Files: %d (%s)\n", bundle.Files, formatBytes(bundle.Bytes))
+	return nil
+}
+
+func importContext(args []string) error {
+	flags := flag.NewFlagSet("context import", flag.ContinueOnError)
+	name := flags.String("name", "", "override context name")
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	flags.Usage = func() { showHelp([]string{"context", "import"}) }
+	bundlePath, err := parseSingleArgument(flags, args, "context bundle file")
+	if err != nil {
+		return err
+	}
+	manifest, err := localContextStore().Import(bundlePath, *name)
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		encoded, _ := json.MarshalIndent(manifest, "", "  ")
+		fmt.Println(string(encoded))
+		return nil
+	}
+	fmt.Printf("Imported %s from %s\n", manifest.Name, bundlePath)
+	printLocalContext(manifest, false)
+	return nil
+}
+
+func syncContext(c *client.Client, args []string) error {
+	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
+		showHelp([]string{"context", "sync"})
+		return nil
+	}
+	switch args[0] {
+	case "push":
+		return pushContext(c, args[1:])
+	case "pull":
+		return pullContext(c, args[1:])
+	default:
+		return fmt.Errorf("unknown sync direction %q; use push or pull", args[0])
+	}
+}
+
+func pushContext(c *client.Client, args []string) error {
+	flags := flag.NewFlagSet("context sync push", flag.ContinueOnError)
+	remoteName := flags.String("remote-name", "", "remote context name (default local name)")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	image := flags.String("helper-image", "busybox:1.36", "temporary transfer Pod image")
+	flags.Usage = func() { showHelp([]string{"context", "sync", "push"}) }
+	name, err := parseContextName(flags, args)
+	if err != nil {
+		return err
+	}
+	if *remoteName == "" {
+		*remoteName = name
+	}
+	local, err := localContextStore().Get(name)
+	if err != nil {
+		return err
+	}
+	remote, err := c.GetContext(context.Background(), *namespace, *remoteName)
+	if err != nil {
+		return fmt.Errorf("get remote context %s: %w", *remoteName, err)
+	}
+	if remote.Attachment.Kind != "pvc" || remote.Attachment.ClaimName == "" {
+		return fmt.Errorf("remote context %s is not backed by a PVC", *remoteName)
+	}
+	localType := local.Type
+	if localType == "history" {
+		localType = "state"
+	}
+	if remote.Type != localType {
+		return fmt.Errorf("context type mismatch: local %s is %s, remote %s is %s", name, localType, *remoteName, remote.Type)
+	}
+
+	temporary, err := os.MkdirTemp("", "contextctl-sync-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(temporary)
+	bundlePath := filepath.Join(temporary, name+".context")
+	bundle, err := localContextStore().Export(name, bundlePath)
+	if err != nil {
+		return err
+	}
+	kubectl, err := exec.LookPath("kubectl")
+	if err != nil {
+		return errors.New("kubectl is required for Kubernetes context sync")
+	}
+	transport := contextsync.NewKubectl(kubectl, *image)
+	transport.SetProgress(newTransferProgress(os.Stderr).Update)
+	if err := transport.Push(context.Background(), remote.Namespace, remote.Attachment.ClaimName, bundlePath); err != nil {
+		return err
+	}
+	fmt.Printf("Synced %s to pvc/%s in namespace %s\n", name, remote.Attachment.ClaimName, remote.Namespace)
+	fmt.Printf("Files: %d (%s)\n", bundle.Files, formatBytes(bundle.Bytes))
+	return nil
+}
+
+func pullContext(c *client.Client, args []string) error {
+	flags := flag.NewFlagSet("context sync pull", flag.ContinueOnError)
+	name := flags.String("name", "", "local context name (default remote name)")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	image := flags.String("helper-image", "busybox:1.36", "temporary transfer Pod image")
+	flags.Usage = func() { showHelp([]string{"context", "sync", "pull"}) }
+	remoteName, err := parseContextName(flags, args)
+	if err != nil {
+		return err
+	}
+	if *name == "" {
+		*name = remoteName
+	}
+	store := localContextStore()
+	if _, err := store.Get(*name); err == nil {
+		return fmt.Errorf("local context %s: %w", *name, localcontext.ErrAlreadyExists)
+	} else if !errors.Is(err, localcontext.ErrNotFound) {
+		return err
+	}
+	remote, err := c.GetContext(context.Background(), *namespace, remoteName)
+	if err != nil {
+		return fmt.Errorf("get remote context %s: %w", remoteName, err)
+	}
+	if remote.Attachment.Kind != "pvc" || remote.Attachment.ClaimName == "" {
+		return fmt.Errorf("remote context %s is not backed by a PVC", remoteName)
+	}
+
+	temporary, err := os.MkdirTemp("", "contextctl-sync-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(temporary)
+	bundlePath := filepath.Join(temporary, remoteName+".context")
+	kubectl, err := exec.LookPath("kubectl")
+	if err != nil {
+		return errors.New("kubectl is required for Kubernetes context sync")
+	}
+	transport := contextsync.NewKubectl(kubectl, *image)
+	transport.SetProgress(newTransferProgress(os.Stderr).Update)
+	if err := transport.Pull(context.Background(), remote.Namespace, remote.Attachment.ClaimName, bundlePath); err != nil {
+		return err
+	}
+	manifest, err := store.Import(bundlePath, *name)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Synced pvc/%s in namespace %s to local context %s\n", remote.Attachment.ClaimName, remote.Namespace, manifest.Name)
+	printLocalContext(manifest, false)
+	return nil
+}
+
 func hookCommand(args []string, input io.Reader) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		fmt.Print(`contextctl hook is used internally by agent harness integrations.
@@ -769,6 +945,64 @@ func formatBytes(value int64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(value)/float64(divisor), "KMGTPE"[exponent])
 }
 
+type transferProgress struct {
+	mu          sync.Mutex
+	output      io.Writer
+	interactive bool
+	last        time.Time
+}
+
+func newTransferProgress(output io.Writer) *transferProgress {
+	progress := &transferProgress{output: output}
+	if file, ok := output.(*os.File); ok {
+		if info, err := file.Stat(); err == nil {
+			progress.interactive = info.Mode()&os.ModeCharDevice != 0
+		}
+	}
+	return progress
+}
+
+func (p *transferProgress) Update(value contextsync.Progress) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !value.Done && (!p.interactive || (!p.last.IsZero() && time.Since(p.last) < 100*time.Millisecond)) {
+		return
+	}
+	p.last = time.Now()
+	percent := 0
+	if value.Total == 0 || value.Transferred >= value.Total {
+		percent = 100
+	} else {
+		percent = int(value.Transferred * 100 / value.Total)
+	}
+	rate := int64(0)
+	if value.Elapsed > 0 {
+		rate = int64(float64(value.Transferred) / value.Elapsed.Seconds())
+	}
+	label := "Uploading"
+	if value.Direction == "download" {
+		label = "Downloading"
+	}
+	line := fmt.Sprintf("%-11s %3d%%  %s / %s  %s/s  %s",
+		label, percent, formatBytes(value.Transferred), formatBytes(value.Total), formatBytes(rate),
+		formatTransferElapsed(value.Elapsed))
+	if p.interactive {
+		fmt.Fprintf(p.output, "\r%-78s", line)
+		if value.Done {
+			fmt.Fprintln(p.output)
+		}
+		return
+	}
+	if value.Done {
+		fmt.Fprintln(p.output, line)
+	}
+}
+
+func formatTransferElapsed(value time.Duration) string {
+	totalSeconds := int64(value.Round(time.Second) / time.Second)
+	return fmt.Sprintf("%02d:%02d", totalSeconds/60, totalSeconds%60)
+}
+
 func removeContext(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context delete", flag.ContinueOnError)
 	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
@@ -937,6 +1171,20 @@ func parseContextName(flags *flag.FlagSet, args []string) (string, error) {
 	if flags.NArg() != 1 {
 		flags.Usage()
 		return "", errors.New("exactly one context name is required")
+	}
+	return flags.Arg(0), nil
+}
+
+func parseSingleArgument(flags *flag.FlagSet, args []string, label string) (string, error) {
+	if len(args) > 1 && !strings.HasPrefix(args[0], "-") {
+		args = append(append([]string{}, args[1:]...), args[0])
+	}
+	if err := flags.Parse(args); err != nil {
+		return "", err
+	}
+	if flags.NArg() != 1 {
+		flags.Usage()
+		return "", fmt.Errorf("exactly one %s is required", label)
 	}
 	return flags.Arg(0), nil
 }
@@ -1211,6 +1459,9 @@ Commands:
   restore NAME         Restore captured state into a project
   attach NAME          Capture harness state automatically
   detach NAME          Stop automatic capture for a project
+  export NAME          Write a portable .context bundle
+  import FILE          Import a portable .context bundle
+  sync push|pull       Transfer state between local and PVC contexts
   delete NAME          Delete a named context (alias: rm)
 
 Run "contextctl help context COMMAND" for command options.
@@ -1294,6 +1545,53 @@ Options:
   --harness NAME         Agent harness (default claude)
   --json                 Print JSON
 `)
+		case "export":
+			fmt.Print(`Usage: contextctl context export NAME [options]
+
+Write a portable, checksummed .context bundle. Machine-local harness attachments are excluded.
+
+Options:
+  --output FILE          Output file (default NAME.context)
+  --json                 Print JSON
+`)
+		case "import":
+			fmt.Print(`Usage: contextctl context import FILE [options]
+
+Verify and import a portable .context bundle into the local context store.
+
+Options:
+  --name NAME            Override the context name stored in the bundle
+  --json                 Print JSON
+`)
+		case "sync":
+			if len(args) == 2 {
+				fmt.Print(`Usage: contextctl context sync push|pull NAME [options]
+
+Transfer a portable context bundle between the local store and a Context Service PVC.
+The current kubectl context must point to the same cluster as Context Service.
+`)
+				return
+			}
+			switch args[2] {
+			case "push":
+				fmt.Print(`Usage: contextctl context sync push LOCAL_NAME [options]
+
+Options:
+  --remote-name NAME     Remote context name (default LOCAL_NAME)
+  --namespace NAME       Kubernetes namespace
+  --helper-image IMAGE   Temporary transfer Pod image (default busybox:1.36)
+`)
+			case "pull":
+				fmt.Print(`Usage: contextctl context sync pull REMOTE_NAME [options]
+
+Options:
+  --name NAME            Local context name (default REMOTE_NAME)
+  --namespace NAME       Kubernetes namespace
+  --helper-image IMAGE   Temporary transfer Pod image (default busybox:1.36)
+`)
+			default:
+				fmt.Printf("Unknown sync direction %q.\n", args[2])
+			}
 		case "delete", "rm":
 			fmt.Print("Usage: contextctl context delete NAME [--namespace NAME]\n")
 		default:

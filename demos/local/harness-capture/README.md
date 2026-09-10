@@ -1,6 +1,7 @@
-# Local agent state
+# Capture local agent state
 
-Capture a harness's native sessions, memory files, and metadata in a local context.
+Attach a filesystem context to a local harness and capture its native sessions, memory files, and
+metadata.
 
 > Agent state may contain prompts, files, command output, and secrets. Protect `~/.contexts`.
 
@@ -29,7 +30,7 @@ Remember that the project code word is violet telescope.
 
 Wait for its response, then exit Claude. Context Service captures the native state automatically.
 
-Use `codex`, `opencode`, or `pi` instead of `claude` to attach another harness.
+Use `codex`, `opencode`, or `pi` instead of `claude` to capture another harness.
 
 Inspect the captured state:
 
@@ -38,7 +39,7 @@ contextctl ctx get demo --backend filesystem
 find ~/.contexts/demo -type f
 ```
 
-To stop automatic capture:
+Stop automatic capture:
 
 ```sh
 contextctl ctx detach demo --harness claude
@@ -54,3 +55,6 @@ claude --resume
 ```
 
 Select the captured session and ask: `What is the project code word?`
+
+See [Harness attachments](../../../docs/harness-attachments.md) for integration details and
+supported harnesses.

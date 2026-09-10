@@ -121,9 +121,9 @@ func validateContext(request contextresource.CreateRequest) error {
 		return errors.New("namespace must be a lowercase Kubernetes name")
 	}
 	switch request.Type {
-	case "workspace", "memory", "knowledge", "artifacts":
+	case "workspace", "state", "memory", "knowledge", "artifacts":
 	default:
-		return errors.New("type must be workspace, memory, knowledge, or artifacts")
+		return errors.New("type must be workspace, state, memory, knowledge, or artifacts")
 	}
 	if request.Storage.Backend != "pvc" {
 		return errors.New("storage.backend must be pvc")
