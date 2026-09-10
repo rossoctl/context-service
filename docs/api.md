@@ -247,8 +247,8 @@ subject headers and inject the authenticated `kind:name` identity. See [Context 
 consumers](context-access.md) for grants, Kubernetes service-account mapping, discovery, and safe
 deletion.
 
-Object-storage artifact backends are not implemented. The current `artifacts` context type is
-PVC-backed classification only. See the [artifact storage proposal](artifacts-proposal.md).
+Artifact publication is a local `contextctl` workflow whose portable bundles use the existing PVC
+and S3 synchronization paths. See [Artifact contexts](artifacts.md).
 
 # Context lifecycle
 
