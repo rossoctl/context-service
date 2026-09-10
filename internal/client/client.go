@@ -82,6 +82,58 @@ func (c *Client) GetContext(ctx context.Context, namespace, name string) (contex
 	return result, err
 }
 
+func (c *Client) CreateContextSnapshot(ctx context.Context, namespace, name string, request contextresource.SnapshotRequest) (contextresource.Snapshot, error) {
+	var result contextresource.Snapshot
+	err := c.do(ctx, http.MethodPost, contextPath(namespace, name)+"/snapshots", request, &result)
+	return result, err
+}
+
+func (c *Client) ListContextSnapshots(ctx context.Context, namespace, name string) ([]contextresource.Snapshot, error) {
+	var result contextresource.SnapshotList
+	err := c.do(ctx, http.MethodGet, contextPath(namespace, name)+"/snapshots", nil, &result)
+	return result.Items, err
+}
+
+func (c *Client) GetContextSnapshot(ctx context.Context, namespace, name, snapshot string) (contextresource.Snapshot, error) {
+	var result contextresource.Snapshot
+	err := c.do(ctx, http.MethodGet, contextPath(namespace, name)+"/snapshots/"+url.PathEscape(snapshot), nil, &result)
+	return result, err
+}
+
+func (c *Client) CloneContextSnapshot(ctx context.Context, namespace, name string, request contextresource.CloneRequest) (contextresource.Resource, error) {
+	var result contextresource.Resource
+	err := c.do(ctx, http.MethodPost, contextPath(namespace, name)+"/clones", request, &result)
+	return result, err
+}
+
+func (c *Client) RestoreContextSnapshot(ctx context.Context, namespace, name string, request contextresource.RestoreRequest) (contextresource.Resource, error) {
+	var result contextresource.Resource
+	err := c.do(ctx, http.MethodPost, contextPath(namespace, name)+"/restore", request, &result)
+	return result, err
+}
+
+func (c *Client) SetContextRetention(ctx context.Context, namespace, name string, request contextresource.RetentionRequest) (contextresource.Resource, error) {
+	var result contextresource.Resource
+	err := c.do(ctx, http.MethodPut, contextPath(namespace, name)+"/retention", request, &result)
+	return result, err
+}
+
+func (c *Client) GarbageCollectContextSnapshots(ctx context.Context, namespace, name string, dryRun bool) (contextresource.GarbageCollection, error) {
+	var result contextresource.GarbageCollection
+	path := contextPath(namespace, name) + "/gc"
+	if dryRun {
+		path += "?dryRun=true"
+	}
+	err := c.do(ctx, http.MethodPost, path, nil, &result)
+	return result, err
+}
+
+func (c *Client) ContextLifecycleCapabilities(ctx context.Context, namespace, name string) (contextresource.LifecycleCapabilities, error) {
+	var result contextresource.LifecycleCapabilities
+	err := c.do(ctx, http.MethodGet, contextPath(namespace, name)+"/capabilities", nil, &result)
+	return result, err
+}
+
 func (c *Client) DeleteContext(ctx context.Context, namespace, name string) error {
 	return c.do(ctx, http.MethodDelete, "/v1/namespaces/"+url.PathEscape(namespace)+"/contexts/"+url.PathEscape(name), nil, nil)
 }

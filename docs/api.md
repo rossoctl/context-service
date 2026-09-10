@@ -236,6 +236,7 @@ Successful deletion returns `204 No Content`.
 | `404` | `not_found` | Allocation not found |
 | `409` | `already_exists` | Allocation resources already exist |
 | `409` | `in_use` | Context has declared or active consumers |
+| `501` | `unsupported` | The storage backend cannot perform the requested lifecycle operation |
 | `500` | `internal_error` | Kubernetes or service failure |
 
 The service expects authentication at its ingress gateway. `contextctl` sends its configured token
@@ -246,3 +247,20 @@ deletion.
 
 Object-storage artifact backends are not implemented. The current `artifacts` context type is
 PVC-backed classification only. See the [artifact storage proposal](artifacts-proposal.md).
+
+# Context lifecycle
+
+```text
+POST /v1/namespaces/{namespace}/contexts/{name}/snapshots
+GET  /v1/namespaces/{namespace}/contexts/{name}/snapshots
+GET  /v1/namespaces/{namespace}/contexts/{name}/snapshots/{snapshot}
+POST /v1/namespaces/{namespace}/contexts/{name}/clones
+POST /v1/namespaces/{namespace}/contexts/{name}/restore
+PUT  /v1/namespaces/{namespace}/contexts/{name}/retention
+POST /v1/namespaces/{namespace}/contexts/{name}/gc?dryRun=true
+GET  /v1/namespaces/{namespace}/contexts/{name}/capabilities
+```
+
+Lifecycle routes use the same subject header and access rules as contexts. Snapshot creation and
+restore require `write`, clone requires `derive`, inspection requires `read`, and retention or
+garbage collection requires `administer`.

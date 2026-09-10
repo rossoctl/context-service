@@ -141,10 +141,18 @@ func (s *Store) Export(name, outputPath string) (Bundle, error) {
 		return Bundle{}, err
 	}
 	defer unlock()
+	return s.exportUnlocked(manifest, outputPath)
+}
+
+// exportUnlocked writes a bundle while the caller holds the context capture
+// lock. Keeping this separate lets lifecycle operations snapshot exactly the
+// revision they publish without dropping and reacquiring the lock.
+func (s *Store) exportUnlocked(manifest Manifest, outputPath string) (Bundle, error) {
+	name := manifest.Name
 	if outputPath == "" {
 		outputPath = name + ".context"
 	}
-	outputPath, err = filepath.Abs(outputPath)
+	outputPath, err := filepath.Abs(outputPath)
 	if err != nil {
 		return Bundle{}, err
 	}

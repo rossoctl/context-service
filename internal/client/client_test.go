@@ -117,6 +117,38 @@ func TestContextResourcePaths(t *testing.T) {
 				return err
 			},
 		},
+		{
+			name: "create snapshot", method: http.MethodPost, path: "/v1/namespaces/team1/contexts/demo/snapshots",
+			body: `{"name":"baseline","contextName":"demo","namespace":"team1","status":"creating","snapshotName":"context-demo-baseline","sourceClaimName":"context-demo"}`,
+			call: func(c *Client) error {
+				_, err := c.CreateContextSnapshot(context.Background(), "team1", "demo", contextresource.SnapshotRequest{Name: "baseline"})
+				return err
+			},
+		},
+		{
+			name: "list snapshots", method: http.MethodGet, path: "/v1/namespaces/team1/contexts/demo/snapshots",
+			body: `{"items":[]}`,
+			call: func(c *Client) error {
+				_, err := c.ListContextSnapshots(context.Background(), "team1", "demo")
+				return err
+			},
+		},
+		{
+			name: "clone snapshot", method: http.MethodPost, path: "/v1/namespaces/team1/contexts/demo/clones",
+			body: `{"name":"copy","namespace":"team1","storage":{},"attachment":{}}`,
+			call: func(c *Client) error {
+				_, err := c.CloneContextSnapshot(context.Background(), "team1", "demo", contextresource.CloneRequest{Name: "copy", Snapshot: "baseline"})
+				return err
+			},
+		},
+		{
+			name: "capabilities", method: http.MethodGet, path: "/v1/namespaces/team1/contexts/demo/capabilities",
+			body: `{"snapshots":true,"clones":true,"restore":false}`,
+			call: func(c *Client) error {
+				_, err := c.ContextLifecycleCapabilities(context.Background(), "team1", "demo")
+				return err
+			},
+		},
 	}
 
 	for _, test := range tests {
