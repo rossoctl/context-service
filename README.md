@@ -68,6 +68,7 @@ configuration, sandbox profiles, and illustrated storage layouts.
 - [Snapshots, clones, and retention](docs/context-lifecycle.md)
 - [Memory and knowledge query API](docs/context-query.md)
 - [Immutable artifact publishing](docs/artifacts.md)
+- [Context relationship graph](docs/context-graph.md)
 - [API reference](docs/api.md) and [API examples](docs/api-examples.md)
 - [Serverless Harness integration](docs/serverless-harness.md)
 - [WarmPool integration](docs/warm-pools.md)
