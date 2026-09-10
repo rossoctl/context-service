@@ -122,6 +122,44 @@ func TestExportIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestRevisionChangesOnlyWithPortableContent(t *testing.T) {
+	root := t.TempDir()
+	store := New(filepath.Join(root, "contexts"))
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create("demo", "state"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.Revision("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AttachPi("demo", project, "/bin/contextctl"); err != nil {
+		t.Fatal(err)
+	}
+	attached, err := store.Revision("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attached.Digest != first.Digest {
+		t.Fatal("machine-local attachment changed portable revision")
+	}
+	session := filepath.Join(root, "session.jsonl")
+	writeFixture(t, session, "portable state\n")
+	if _, _, err := store.CaptureSessionFile("demo", "codex", project, "session-1", session); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := store.Revision("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.Digest == first.Digest || changed.Files != 1 || changed.Bytes != int64(len("portable state\n")) {
+		t.Fatalf("revision = %+v, initial = %+v", changed, first)
+	}
+}
+
 func TestImportRejectsPathTraversal(t *testing.T) {
 	root := t.TempDir()
 	bundlePath := filepath.Join(root, "unsafe.context")
