@@ -34,11 +34,18 @@ type Manifest struct {
 }
 
 type Derivation struct {
-	SourceContext  string    `json:"sourceContext"`
-	SourceType     string    `json:"sourceType"`
-	SourceRevision string    `json:"sourceRevision"`
-	GeneratedAt    time.Time `json:"generatedAt"`
-	Generator      string    `json:"generator"`
+	SourceContext  string            `json:"sourceContext,omitempty"`
+	SourceType     string            `json:"sourceType,omitempty"`
+	SourceRevision string            `json:"sourceRevision,omitempty"`
+	Sources        []SourceReference `json:"sources,omitempty"`
+	GeneratedAt    time.Time         `json:"generatedAt"`
+	Generator      string            `json:"generator"`
+}
+
+type SourceReference struct {
+	Context  string `json:"context"`
+	Type     string `json:"type"`
+	Revision string `json:"revision"`
 }
 
 type Capture struct {

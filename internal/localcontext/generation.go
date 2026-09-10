@@ -17,18 +17,27 @@ type GenerationSource struct {
 	Type     string
 	Revision Revision
 	Content  string
+	Files    []string
 }
 
 // StateForGeneration returns a stable text view and revision while capture is
 // locked. Binary files contribute to the revision but are not sent to the
 // generator.
 func (s *Store) StateForGeneration(name string, maxTextBytes int64) (GenerationSource, error) {
+	return s.contextForGeneration(name, maxTextBytes, map[string]bool{"state": true, "history": true}, []string{"harnesses"}, "memory generation requires state")
+}
+
+func (s *Store) ContextForKnowledge(name string, maxTextBytes int64) (GenerationSource, error) {
+	return s.contextForGeneration(name, maxTextBytes, map[string]bool{"state": true, "history": true, "memory": true}, []string{"harnesses", "memory"}, "knowledge generation requires state or memory")
+}
+
+func (s *Store) contextForGeneration(name string, maxTextBytes int64, allowedTypes map[string]bool, roots []string, typeError string) (GenerationSource, error) {
 	manifest, err := s.Get(name)
 	if err != nil {
 		return GenerationSource{}, err
 	}
-	if manifest.Type != "state" && manifest.Type != "history" {
-		return GenerationSource{}, fmt.Errorf("source context %s is %s; memory generation requires state", name, manifest.Type)
+	if !allowedTypes[manifest.Type] {
+		return GenerationSource{}, fmt.Errorf("source context %s is %s; %s", name, manifest.Type, typeError)
 	}
 	unlock, err := acquireCaptureLock(s.contextDir(name), 0)
 	if err != nil {
@@ -40,26 +49,30 @@ func (s *Store) StateForGeneration(name string, maxTextBytes int64) (GenerationS
 		return GenerationSource{}, err
 	}
 
-	root := filepath.Join(s.contextDir(name), "harnesses")
 	var paths []string
-	err = filepath.WalkDir(root, func(filePath string, item fs.DirEntry, walkErr error) error {
-		if errors.Is(walkErr, os.ErrNotExist) && filePath == root {
-			return fs.SkipDir
+	contextRoot := s.contextDir(name)
+	for _, rootName := range roots {
+		root := filepath.Join(contextRoot, rootName)
+		err = filepath.WalkDir(root, func(filePath string, item fs.DirEntry, walkErr error) error {
+			if errors.Is(walkErr, os.ErrNotExist) && filePath == root {
+				return fs.SkipDir
+			}
+			if walkErr != nil {
+				return walkErr
+			}
+			if !item.IsDir() {
+				paths = append(paths, filePath)
+			}
+			return nil
+		})
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return GenerationSource{}, err
 		}
-		if walkErr != nil {
-			return walkErr
-		}
-		if !item.IsDir() {
-			paths = append(paths, filePath)
-		}
-		return nil
-	})
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return GenerationSource{}, err
 	}
 	sort.Strings(paths)
 	var content bytes.Buffer
 	var textBytes int64
+	var files []string
 	for _, filePath := range paths {
 		info, err := os.Stat(filePath)
 		if err != nil {
@@ -78,18 +91,19 @@ func (s *Store) StateForGeneration(name string, maxTextBytes int64) (GenerationS
 		if !utf8.Valid(data) {
 			continue
 		}
-		relative, _ := filepath.Rel(root, filePath)
+		relative, _ := filepath.Rel(contextRoot, filePath)
 		fmt.Fprintf(&content, "\n--- %s ---\n", filepath.ToSlash(relative))
 		content.Write(data)
 		if len(data) > 0 && data[len(data)-1] != '\n' {
 			content.WriteByte('\n')
 		}
 		textBytes += int64(len(data))
+		files = append(files, filepath.ToSlash(relative))
 	}
 	if content.Len() == 0 {
 		return GenerationSource{}, errors.New("state context has no readable captured files")
 	}
-	return GenerationSource{Name: name, Type: manifest.Type, Revision: revision, Content: content.String()}, nil
+	return GenerationSource{Name: name, Type: manifest.Type, Revision: revision, Content: content.String(), Files: files}, nil
 }
 
 func (s *Store) CreateDerivedMemory(name string, source GenerationSource, generator, memory string) (Manifest, error) {

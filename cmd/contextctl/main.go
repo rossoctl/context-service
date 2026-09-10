@@ -274,6 +274,8 @@ func contextCommand(c *client.Client, args []string) error {
 		return backupCommand(c, args[1:])
 	case "derive":
 		return deriveContext(args[1:])
+	case "search":
+		return searchContext(args[1:])
 	default:
 		return fmt.Errorf("unknown context command %q; run 'contextctl help context'", args[0])
 	}
@@ -956,8 +958,16 @@ func printLocalDerivation(value localcontext.Manifest) {
 	if value.Type == "memory" {
 		fmt.Printf("    └── memory  %s\n", memoryPath(value))
 	}
+	if value.Type == "knowledge" {
+		fmt.Printf("    └── knowledge  %s\n", knowledgePath(value))
+	}
 	if value.Derivation != nil {
-		fmt.Printf("    └── source  %s@%s · %s\n", value.Derivation.SourceContext, shortRevision(value.Derivation.SourceRevision), value.Derivation.Generator)
+		if value.Derivation.SourceContext != "" {
+			fmt.Printf("    └── source  %s@%s · %s\n", value.Derivation.SourceContext, shortRevision(value.Derivation.SourceRevision), value.Derivation.Generator)
+		}
+		for _, source := range value.Derivation.Sources {
+			fmt.Printf("    └── source  %s@%s · %s\n", source.Context, shortRevision(source.Revision), value.Derivation.Generator)
+		}
 	}
 }
 
@@ -1568,6 +1578,8 @@ Commands:
   sync push|pull       Transfer state between local and remote storage
   backup COMMAND       Back up local state automatically
   derive memory        Generate durable memory from captured state
+  derive knowledge     Build searchable knowledge from state or memory
+  search NAME QUERY    Search a local knowledge context
   delete NAME          Delete a named context (alias: rm)
 
 Run "contextctl help context COMMAND" for command options.
@@ -1741,9 +1753,9 @@ service managers, and troubleshooting.
 			}
 		case "derive":
 			if len(args) == 2 {
-				fmt.Print(`Usage: contextctl context derive memory SOURCE [options]
+				fmt.Print(`Usage: contextctl context derive memory|knowledge [options]
 
-Generate a separate long-term memory context from captured state.
+Generate memory from captured state or searchable knowledge from selected contexts.
 `)
 				return
 			}
@@ -1757,9 +1769,28 @@ Options:
   --model NAME          Optional model override
   --max-input BYTES     Maximum captured text bytes (default 2097152)
 `)
+			case "knowledge":
+				fmt.Print(`Usage: contextctl context derive knowledge --from NAME [--from NAME...] [options]
+
+Options:
+  --name NAME           Knowledge context name (default FIRST_SOURCE-knowledge)
+  --from NAME           Source state or memory context (repeatable)
+  --agent NAME          claude or codex (default claude)
+  --model NAME          Optional model override
+  --max-input BYTES     Maximum text bytes per source (default 2097152)
+`)
 			default:
 				fmt.Printf("Unknown derived context %q.\n", args[2])
 			}
+		case "search":
+			fmt.Print(`Usage: contextctl context search NAME QUERY [options]
+
+Search a local knowledge context and show source attribution.
+
+Options:
+  --limit NUMBER        Maximum results (default 5)
+  --json                Print JSON
+`)
 		case "delete", "rm":
 			fmt.Print("Usage: contextctl context delete NAME [--namespace NAME]\n")
 		default:
