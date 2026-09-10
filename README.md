@@ -25,6 +25,8 @@ or create Kubernetes resources directly.
 Context Service currently supports:
 
 - Named PVC-backed `workspace`, `memory`, `knowledge`, and `artifacts` resources
+- Immutable snapshots, writable clones, safe restore, and retention for local contexts; CSI
+  snapshots and clones for PVC contexts
 - Dedicated RWO workspaces per sandbox
 - One shared RWX workspace across a sandbox pool
 - An existing PVC mounted explicitly read-only or read-write
@@ -63,6 +65,7 @@ configuration, sandbox profiles, and illustrated storage layouts.
 - [Getting started](docs/getting-started.md)
 - [Vision](VISION.md)
 - [Design and workflows](docs/design.md)
+- [Snapshots, clones, and retention](docs/context-lifecycle.md)
 - [API reference](docs/api.md) and [API examples](docs/api-examples.md)
 - [Serverless Harness integration](docs/serverless-harness.md)
 - [WarmPool integration](docs/warm-pools.md)

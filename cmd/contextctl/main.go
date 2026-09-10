@@ -280,6 +280,8 @@ func contextCommand(c *client.Client, args []string) error {
 		return searchContext(args[1:])
 	case "revisions":
 		return revisionsContext(c, args[1:])
+	case "snapshot", "snapshots":
+		return snapshotCommand(c, args[1:])
 	case "lineage":
 		return lineageContext(args[1:])
 	case "access":
@@ -1638,6 +1640,7 @@ Commands:
   derive knowledge     Build searchable knowledge from state or memory
   search NAME QUERY    Search a local knowledge context
   revisions NAME       Show local revision history
+  snapshot COMMAND     Snapshot, clone, restore, and retain local context
   lineage NAME         Show derivation sources and availability
   access NAME          Show effective access and consumers
   grant NAME           Grant a subject access to a PVC context
@@ -1689,6 +1692,39 @@ Options:
 			fmt.Print("Usage: contextctl context get NAME [--backend pvc|filesystem] [--namespace NAME] [--json]\n")
 		case "revisions":
 			fmt.Print("Usage: contextctl context revisions NAME [--backend pvc|filesystem] [--namespace NAME] [--json]\n")
+		case "snapshot", "snapshots":
+			if len(args) == 2 {
+				fmt.Print(`Usage: contextctl context snapshot COMMAND [options]
+
+Commands:
+  create CONTEXT NAME       Save an immutable snapshot
+  list CONTEXT              List snapshots and retention
+  clone CONTEXT@NAME NEW    Create a writable context from a snapshot
+  restore CONTEXT NAME      Restore safely, preserving current state first
+  retention CONTEXT         Set count and age retention
+  gc CONTEXT                Remove expired, unreferenced snapshots
+  capabilities CONTEXT      Show storage lifecycle support
+`)
+				return
+			}
+			switch args[2] {
+			case "create":
+				fmt.Print("Usage: contextctl context snapshot create CONTEXT NAME [--protect] [--json]\n")
+			case "list":
+				fmt.Print("Usage: contextctl context snapshot list CONTEXT [--json]\n")
+			case "clone":
+				fmt.Print("Usage: contextctl context snapshot clone CONTEXT@SNAPSHOT NEW_CONTEXT [--json]\n")
+			case "restore":
+				fmt.Print("Usage: contextctl context snapshot restore CONTEXT SNAPSHOT [--json]\n")
+			case "retention":
+				fmt.Print("Usage: contextctl context snapshot retention CONTEXT [--keep-last N] [--max-age DURATION]\n")
+			case "gc":
+				fmt.Print("Usage: contextctl context snapshot gc CONTEXT [--dry-run] [--json]\n")
+			case "capabilities":
+				fmt.Print("Usage: contextctl context snapshot capabilities CONTEXT [--backend pvc|filesystem] [--namespace NAME] [--json]\n")
+			default:
+				fmt.Printf("Unknown snapshot command %q.\n", args[2])
+			}
 		case "lineage":
 			fmt.Print("Usage: contextctl context lineage NAME [--json]\n")
 		case "access":

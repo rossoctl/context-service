@@ -46,6 +46,14 @@ func NewHandler(manager interface {
 	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}", h.getContext)
 	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}/revisions", h.listContextRevisions)
 	mux.HandleFunc("POST /v1/namespaces/{namespace}/contexts/{name}/revisions", h.publishContextRevision)
+	mux.HandleFunc("POST /v1/namespaces/{namespace}/contexts/{name}/snapshots", h.createContextSnapshot)
+	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}/snapshots", h.listContextSnapshots)
+	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}/snapshots/{snapshot}", h.getContextSnapshot)
+	mux.HandleFunc("POST /v1/namespaces/{namespace}/contexts/{name}/clones", h.cloneContextSnapshot)
+	mux.HandleFunc("POST /v1/namespaces/{namespace}/contexts/{name}/restore", h.restoreContextSnapshot)
+	mux.HandleFunc("PUT /v1/namespaces/{namespace}/contexts/{name}/retention", h.setContextRetention)
+	mux.HandleFunc("POST /v1/namespaces/{namespace}/contexts/{name}/gc", h.garbageCollectContextSnapshots)
+	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}/capabilities", h.contextLifecycleCapabilities)
 	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}/grants", h.listContextGrants)
 	mux.HandleFunc("PUT /v1/namespaces/{namespace}/contexts/{name}/grants", h.setContextGrant)
 	mux.HandleFunc("DELETE /v1/namespaces/{namespace}/contexts/{name}/grants", h.revokeContextGrant)
@@ -55,6 +63,146 @@ func NewHandler(manager interface {
 	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}/audit", h.listContextAudit)
 	mux.HandleFunc("DELETE /v1/namespaces/{namespace}/contexts/{name}", h.deleteContext)
 	return mux
+}
+
+func (h *handler) createContextSnapshot(w http.ResponseWriter, r *http.Request) {
+	if !h.requireContextAccess(w, r, contextresource.PermissionWrite) {
+		return
+	}
+	var request contextresource.SnapshotRequest
+	if err := decodeBody(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateResourceName("snapshot", request.Name); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := h.manager.CreateContextSnapshot(r.Context(), r.PathValue("namespace"), r.PathValue("name"), request)
+	if err != nil {
+		writeContextError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (h *handler) listContextSnapshots(w http.ResponseWriter, r *http.Request) {
+	if !h.requireContextAccess(w, r, contextresource.PermissionRead) {
+		return
+	}
+	items, err := h.manager.ListContextSnapshots(r.Context(), r.PathValue("namespace"), r.PathValue("name"))
+	if err != nil {
+		writeContextError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, contextresource.SnapshotList{Items: items})
+}
+
+func (h *handler) getContextSnapshot(w http.ResponseWriter, r *http.Request) {
+	if !h.requireContextAccess(w, r, contextresource.PermissionRead) {
+		return
+	}
+	result, err := h.manager.GetContextSnapshot(r.Context(), r.PathValue("namespace"), r.PathValue("name"), r.PathValue("snapshot"))
+	if err != nil {
+		writeContextError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *handler) cloneContextSnapshot(w http.ResponseWriter, r *http.Request) {
+	if !h.requireContextAccess(w, r, contextresource.PermissionDerive) {
+		return
+	}
+	var request contextresource.CloneRequest
+	if err := decodeBody(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateResourceName("name", request.Name); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateResourceName("snapshot", request.Snapshot); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	request.Owner = requestSubject(r)
+	result, err := h.manager.CloneContextSnapshot(r.Context(), r.PathValue("namespace"), r.PathValue("name"), request)
+	if err != nil {
+		writeContextError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (h *handler) restoreContextSnapshot(w http.ResponseWriter, r *http.Request) {
+	if !h.requireContextAccess(w, r, contextresource.PermissionWrite) {
+		return
+	}
+	var request contextresource.RestoreRequest
+	if err := decodeBody(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateResourceName("snapshot", request.Snapshot); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := h.manager.RestoreContextSnapshot(r.Context(), r.PathValue("namespace"), r.PathValue("name"), request)
+	if err != nil {
+		writeContextError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *handler) setContextRetention(w http.ResponseWriter, r *http.Request) {
+	if !h.requireContextAccess(w, r, contextresource.PermissionAdminister) {
+		return
+	}
+	var request contextresource.RetentionRequest
+	if err := decodeBody(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := h.manager.SetContextRetention(r.Context(), r.PathValue("namespace"), r.PathValue("name"), request)
+	if err != nil {
+		writeContextError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *handler) garbageCollectContextSnapshots(w http.ResponseWriter, r *http.Request) {
+	if !h.requireContextAccess(w, r, contextresource.PermissionAdminister) {
+		return
+	}
+	result, err := h.manager.GarbageCollectContextSnapshots(r.Context(), r.PathValue("namespace"), r.PathValue("name"), r.URL.Query().Get("dryRun") == "true")
+	if err != nil {
+		writeContextError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *handler) contextLifecycleCapabilities(w http.ResponseWriter, r *http.Request) {
+	if !h.requireContextAccess(w, r, contextresource.PermissionRead) {
+		return
+	}
+	result, err := h.manager.ContextLifecycleCapabilities(r.Context(), r.PathValue("namespace"), r.PathValue("name"))
+	if err != nil {
+		writeContextError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func validateResourceName(label, name string) error {
+	if problems := validation.IsDNS1123Subdomain(name); len(problems) > 0 {
+		return fmt.Errorf("%s must be a Kubernetes name", label)
+	}
+	return nil
 }
 
 func (h *handler) listContextRevisions(w http.ResponseWriter, r *http.Request) {
@@ -410,6 +558,8 @@ func writeContextError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "in_use", err.Error())
 	case errors.Is(err, contextresource.ErrForbidden):
 		writeError(w, http.StatusForbidden, "forbidden", err.Error())
+	case errors.Is(err, contextresource.ErrUnsupported):
+		writeError(w, http.StatusNotImplemented, "unsupported", err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 	}

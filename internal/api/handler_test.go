@@ -99,6 +99,30 @@ func (f *fakeManager) ListContextAudit(_ context.Context, _, _ string) ([]contex
 func (f *fakeManager) ForceDeleteContext(ctx context.Context, namespace, name string) error {
 	return f.DeleteContext(ctx, namespace, name)
 }
+func (f *fakeManager) CreateContextSnapshot(_ context.Context, namespace, name string, request contextresource.SnapshotRequest) (contextresource.Snapshot, error) {
+	return contextresource.Snapshot{Name: request.Name, ContextName: name, Namespace: namespace, Status: "ready"}, nil
+}
+func (f *fakeManager) ListContextSnapshots(_ context.Context, namespace, name string) ([]contextresource.Snapshot, error) {
+	return []contextresource.Snapshot{{Name: "baseline", ContextName: name, Namespace: namespace, Status: "ready"}}, nil
+}
+func (f *fakeManager) GetContextSnapshot(_ context.Context, namespace, name, snapshot string) (contextresource.Snapshot, error) {
+	return contextresource.Snapshot{Name: snapshot, ContextName: name, Namespace: namespace, Status: "ready"}, nil
+}
+func (f *fakeManager) CloneContextSnapshot(_ context.Context, namespace, _ string, request contextresource.CloneRequest) (contextresource.Resource, error) {
+	return contextresource.Resource{Name: request.Name, Namespace: namespace}, nil
+}
+func (f *fakeManager) RestoreContextSnapshot(_ context.Context, namespace, name string, _ contextresource.RestoreRequest) (contextresource.Resource, error) {
+	return contextresource.Resource{Name: name, Namespace: namespace}, nil
+}
+func (f *fakeManager) SetContextRetention(_ context.Context, namespace, name string, _ contextresource.RetentionRequest) (contextresource.Resource, error) {
+	return contextresource.Resource{Name: name, Namespace: namespace}, nil
+}
+func (f *fakeManager) GarbageCollectContextSnapshots(_ context.Context, _, _ string, dryRun bool) (contextresource.GarbageCollection, error) {
+	return contextresource.GarbageCollection{DryRun: dryRun}, nil
+}
+func (f *fakeManager) ContextLifecycleCapabilities(_ context.Context, _, _ string) (contextresource.LifecycleCapabilities, error) {
+	return contextresource.LifecycleCapabilities{Snapshots: true, Clones: true}, nil
+}
 func (f *fakeManager) ListStorageClasses(_ context.Context) ([]storageclass.Resource, error) {
 	return []storageclass.Resource{{Name: "fast", Default: true, Provisioner: "example.csi.io", VolumeBindingMode: "WaitForFirstConsumer", ReclaimPolicy: "Delete", AllowVolumeExpansion: true}}, nil
 }
@@ -115,6 +139,34 @@ func TestListStorageClasses(t *testing.T) {
 		if !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
 			t.Errorf("response missing %s: %s", expected, response.Body.String())
 		}
+	}
+}
+
+func TestContextSnapshotLifecycleRoutes(t *testing.T) {
+	tests := []struct {
+		method string
+		path   string
+		body   string
+		status int
+		match  string
+	}{
+		{http.MethodPost, "/v1/namespaces/team1/contexts/research/snapshots", `{"name":"baseline"}`, http.StatusCreated, `"name":"baseline"`},
+		{http.MethodGet, "/v1/namespaces/team1/contexts/research/snapshots", "", http.StatusOK, `"baseline"`},
+		{http.MethodPost, "/v1/namespaces/team1/contexts/research/clones", `{"name":"copy","snapshot":"baseline"}`, http.StatusCreated, `"name":"copy"`},
+		{http.MethodPost, "/v1/namespaces/team1/contexts/research/restore", `{"snapshot":"baseline"}`, http.StatusOK, `"name":"research"`},
+		{http.MethodPut, "/v1/namespaces/team1/contexts/research/retention", `{"keepLast":3,"maxAge":"168h"}`, http.StatusOK, `"name":"research"`},
+		{http.MethodPost, "/v1/namespaces/team1/contexts/research/gc?dryRun=true", "", http.StatusOK, `"dryRun":true`},
+		{http.MethodGet, "/v1/namespaces/team1/contexts/research/capabilities", "", http.StatusOK, `"snapshots":true`},
+	}
+	for _, test := range tests {
+		t.Run(test.method+" "+test.path, func(t *testing.T) {
+			request := httptest.NewRequest(test.method, test.path, bytes.NewBufferString(test.body))
+			response := httptest.NewRecorder()
+			NewHandler(&fakeManager{}).ServeHTTP(response, request)
+			if response.Code != test.status || !bytes.Contains(response.Body.Bytes(), []byte(test.match)) {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+		})
 	}
 }
 

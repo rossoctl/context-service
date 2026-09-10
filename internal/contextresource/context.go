@@ -12,6 +12,7 @@ var (
 	ErrInvalid       = errors.New("invalid context resource")
 	ErrForbidden     = errors.New("context access denied")
 	ErrInUse         = errors.New("context resource is in use")
+	ErrUnsupported   = errors.New("context lifecycle operation is not supported by this storage backend")
 )
 
 type CreateRequest struct {
@@ -118,6 +119,62 @@ type RevisionList struct {
 	Items []Revision `json:"items"`
 }
 
+type SnapshotRequest struct {
+	Name          string            `json:"name"`
+	SnapshotClass string            `json:"snapshotClass,omitempty"`
+	Protected     bool              `json:"protected,omitempty"`
+	Labels        map[string]string `json:"labels,omitempty"`
+}
+
+type Snapshot struct {
+	Name            string            `json:"name"`
+	ContextName     string            `json:"contextName"`
+	Namespace       string            `json:"namespace"`
+	Revision        string            `json:"revision,omitempty"`
+	Status          string            `json:"status"`
+	SnapshotName    string            `json:"snapshotName"`
+	SnapshotClass   string            `json:"snapshotClass,omitempty"`
+	SourceClaimName string            `json:"sourceClaimName"`
+	CreatedAt       time.Time         `json:"createdAt,omitempty"`
+	Protected       bool              `json:"protected,omitempty"`
+	Labels          map[string]string `json:"labels,omitempty"`
+	Error           string            `json:"error,omitempty"`
+}
+
+type SnapshotList struct {
+	Items []Snapshot `json:"items"`
+}
+
+type CloneRequest struct {
+	Name     string  `json:"name"`
+	Snapshot string  `json:"snapshot"`
+	Owner    Subject `json:"-"`
+}
+
+type RestoreRequest struct {
+	Snapshot string `json:"snapshot"`
+}
+
+type RetentionRequest struct {
+	KeepLast int    `json:"keepLast,omitempty"`
+	MaxAge   string `json:"maxAge,omitempty"`
+}
+
+type GarbageCollection struct {
+	DryRun  bool       `json:"dryRun"`
+	Deleted []Snapshot `json:"deleted,omitempty"`
+	Kept    []Snapshot `json:"kept,omitempty"`
+}
+
+type LifecycleCapabilities struct {
+	Snapshots bool   `json:"snapshots"`
+	Clones    bool   `json:"clones"`
+	Restore   bool   `json:"restore"`
+	Driver    string `json:"driver,omitempty"`
+	Class     string `json:"snapshotClass,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+}
+
 type List struct {
 	Items []Resource `json:"items"`
 }
@@ -137,4 +194,12 @@ type Manager interface {
 	SetContextConsumer(context.Context, string, string, Consumer, bool, Subject) (Resource, error)
 	ListContextAudit(context.Context, string, string) ([]AuditEvent, error)
 	ForceDeleteContext(context.Context, string, string) error
+	CreateContextSnapshot(context.Context, string, string, SnapshotRequest) (Snapshot, error)
+	ListContextSnapshots(context.Context, string, string) ([]Snapshot, error)
+	GetContextSnapshot(context.Context, string, string, string) (Snapshot, error)
+	CloneContextSnapshot(context.Context, string, string, CloneRequest) (Resource, error)
+	RestoreContextSnapshot(context.Context, string, string, RestoreRequest) (Resource, error)
+	SetContextRetention(context.Context, string, string, RetentionRequest) (Resource, error)
+	GarbageCollectContextSnapshots(context.Context, string, string, bool) (GarbageCollection, error)
+	ContextLifecycleCapabilities(context.Context, string, string) (LifecycleCapabilities, error)
 }
