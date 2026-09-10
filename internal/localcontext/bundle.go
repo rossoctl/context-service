@@ -34,6 +34,75 @@ type Bundle struct {
 	Bytes         int64  `json:"bytes"`
 }
 
+type Revision struct {
+	Digest string
+	Files  int
+	Bytes  int64
+}
+
+// Revision identifies the portable content of a context. Capture timestamps
+// and machine-local attachments are deliberately excluded, so unchanged
+// harness files produce the same revision.
+func (s *Store) Revision(name string) (Revision, error) {
+	manifest, err := s.Get(name)
+	if err != nil {
+		return Revision{}, err
+	}
+	unlock, err := acquireCaptureLock(s.contextDir(name), 30*time.Second)
+	if err != nil {
+		return Revision{}, err
+	}
+	defer unlock()
+
+	type entry struct {
+		path     string
+		checksum string
+		size     int64
+	}
+	var entries []entry
+	root := filepath.Join(s.contextDir(name), "harnesses")
+	err = filepath.WalkDir(root, func(filePath string, item fs.DirEntry, walkErr error) error {
+		if errors.Is(walkErr, os.ErrNotExist) && filePath == root {
+			return fs.SkipDir
+		}
+		if walkErr != nil {
+			return walkErr
+		}
+		if item.IsDir() {
+			return nil
+		}
+		info, err := item.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("cannot hash non-regular context file: %s", filePath)
+		}
+		relative, err := filepath.Rel(root, filePath)
+		if err != nil {
+			return err
+		}
+		digest, err := checksumFile(filePath)
+		if err != nil {
+			return err
+		}
+		entries = append(entries, entry{path: filepath.ToSlash(relative), checksum: digest, size: info.Size()})
+		return nil
+	})
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Revision{}, err
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].path < entries[j].path })
+	hash := sha256.New()
+	_, _ = fmt.Fprintf(hash, "type\x00%s\x00", manifest.Type)
+	var bytes int64
+	for _, item := range entries {
+		_, _ = fmt.Fprintf(hash, "%s\x00%s\x00%d\x00", item.path, item.checksum, item.size)
+		bytes += item.size
+	}
+	return Revision{Digest: hex.EncodeToString(hash.Sum(nil)), Files: len(entries), Bytes: bytes}, nil
+}
+
 type bundleChecksums struct {
 	FormatVersion int               `json:"formatVersion"`
 	Algorithm     string            `json:"algorithm"`

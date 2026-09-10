@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rossoctl/context-service/internal/client"
+	"github.com/rossoctl/context-service/internal/contextbackup"
 	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/contextsync"
 	"github.com/rossoctl/context-service/internal/localcontext"
@@ -190,6 +191,13 @@ func TestLocalClaudeAttachAndSessionEndHook(t *testing.T) {
 	if err := run([]string{"ctx", "create", "demo", "--type", "state", "--backend", "filesystem"}); err != nil {
 		t.Fatal(err)
 	}
+	manifest, err := localcontext.New(contextHome).Get("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := contextbackup.SaveConfig(manifest.Path, contextbackup.NewConfig("s3://contexts/demo", time.Minute, time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	if err := run([]string{"ctx", "attach", "demo", "--project", project}); err != nil {
 		t.Fatal(err)
 	}
@@ -207,6 +215,9 @@ func TestLocalClaudeAttachAndSessionEndHook(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(contextHome, "demo", "harnesses", "claude", "project", "session.jsonl")); err != nil {
 		t.Fatalf("automatic capture: %v", err)
+	}
+	if triggered, err := contextbackup.TriggerTime(manifest.Path); err != nil || triggered.IsZero() {
+		t.Fatalf("backup trigger: time=%v err=%v", triggered, err)
 	}
 	if err := run([]string{"ctx", "detach", "demo"}); err != nil {
 		t.Fatal(err)

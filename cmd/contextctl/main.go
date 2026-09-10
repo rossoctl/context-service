@@ -270,6 +270,8 @@ func contextCommand(c *client.Client, args []string) error {
 		return importContext(args[1:])
 	case "sync":
 		return syncContext(c, args[1:])
+	case "backup":
+		return backupCommand(c, args[1:])
 	default:
 		return fmt.Errorf("unknown context command %q; run 'contextctl help context'", args[0])
 	}
@@ -400,10 +402,12 @@ func captureContext(args []string) error {
 	if *harness != "claude" {
 		return fmt.Errorf("unsupported harness %q; only claude is available in this demo", *harness)
 	}
-	capture, err := localContextStore().CaptureClaude(name, *project, claudeConfigHome())
+	store := localContextStore()
+	capture, err := store.CaptureClaude(name, *project, claudeConfigHome())
 	if err != nil {
 		return err
 	}
+	_ = notifyBackup(store, name)
 	if *jsonOutput {
 		encoded, _ := json.MarshalIndent(capture, "", "  ")
 		fmt.Println(string(encoded))
@@ -592,6 +596,10 @@ func syncContext(c *client.Client, args []string) error {
 }
 
 func pushContext(c *client.Client, args []string) error {
+	return pushContextWithContext(context.Background(), c, args)
+}
+
+func pushContextWithContext(ctx context.Context, c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context sync push", flag.ContinueOnError)
 	remoteName := flags.String("remote-name", "", "remote context name (default local name)")
 	target := flags.String("to", "", "S3 destination (s3://bucket/prefix)")
@@ -626,12 +634,12 @@ func pushContext(c *client.Client, args []string) error {
 		if err != nil {
 			return err
 		}
-		transport, err := contextsync.NewS3(context.Background(), *s3Region, *s3Endpoint)
+		transport, err := contextsync.NewS3(ctx, *s3Region, *s3Endpoint)
 		if err != nil {
 			return err
 		}
 		transport.SetProgress(newTransferProgress(os.Stderr).Update)
-		if _, err := transport.Push(context.Background(), location, bundlePath); err != nil {
+		if _, err := transport.Push(ctx, location, bundlePath); err != nil {
 			return err
 		}
 		fmt.Printf("Synced %s to %s\n", name, location)
@@ -641,7 +649,7 @@ func pushContext(c *client.Client, args []string) error {
 	if *remoteName == "" {
 		*remoteName = name
 	}
-	remote, err := c.GetContext(context.Background(), *namespace, *remoteName)
+	remote, err := c.GetContext(ctx, *namespace, *remoteName)
 	if err != nil {
 		return fmt.Errorf("get remote context %s: %w", *remoteName, err)
 	}
@@ -672,7 +680,7 @@ func pushContext(c *client.Client, args []string) error {
 	}
 	transport := contextsync.NewKubectl(kubectl, *image)
 	transport.SetProgress(newTransferProgress(os.Stderr).Update)
-	if err := transport.Push(context.Background(), remote.Namespace, remote.Attachment.ClaimName, bundlePath); err != nil {
+	if err := transport.Push(ctx, remote.Namespace, remote.Attachment.ClaimName, bundlePath); err != nil {
 		return err
 	}
 	fmt.Printf("Synced %s to pvc/%s in namespace %s\n", name, remote.Attachment.ClaimName, remote.Namespace)
@@ -808,8 +816,11 @@ func claudeHookCommand(args []string, input io.Reader) error {
 	if *contextHome != "" {
 		store = localcontext.New(*contextHome)
 	}
-	_, err := store.CaptureClaudeHook(*contextName, *project, claudeConfigHome(), input)
-	return err
+	if _, err := store.CaptureClaudeHook(*contextName, *project, claudeConfigHome(), input); err != nil {
+		return err
+	}
+	_ = notifyBackup(store, *contextName)
+	return nil
 }
 
 func codexHookCommand(args []string, input io.Reader) error {
@@ -827,8 +838,11 @@ func codexHookCommand(args []string, input io.Reader) error {
 	if *contextHome != "" {
 		store = localcontext.New(*contextHome)
 	}
-	_, _, err := store.CaptureCodexHook(*contextName, *project, input)
-	return err
+	if _, _, err := store.CaptureCodexHook(*contextName, *project, input); err != nil {
+		return err
+	}
+	_ = notifyBackup(store, *contextName)
+	return nil
 }
 
 func openCodeHookCommand(args []string) error {
@@ -853,8 +867,11 @@ func openCodeHookCommand(args []string) error {
 	if *contextHome != "" {
 		store = localcontext.New(*contextHome)
 	}
-	_, _, err = store.CaptureSessionExport(*contextName, "opencode", *project, *sessionID, strings.NewReader(string(output)))
-	return err
+	if _, _, err = store.CaptureSessionExport(*contextName, "opencode", *project, *sessionID, strings.NewReader(string(output))); err != nil {
+		return err
+	}
+	_ = notifyBackup(store, *contextName)
+	return nil
 }
 
 func piHookCommand(args []string) error {
@@ -873,8 +890,11 @@ func piHookCommand(args []string) error {
 	if *contextHome != "" {
 		store = localcontext.New(*contextHome)
 	}
-	_, _, err := store.CaptureSessionFile(*contextName, "pi", *project, "", *sessionFile)
-	return err
+	if _, _, err := store.CaptureSessionFile(*contextName, "pi", *project, "", *sessionFile); err != nil {
+		return err
+	}
+	_ = notifyBackup(store, *contextName)
+	return nil
 }
 
 func displayHarness(value string) string {
@@ -1533,6 +1553,7 @@ Commands:
   export NAME          Write a portable .context bundle
   import FILE          Import a portable .context bundle
   sync push|pull       Transfer state between local and remote storage
+  backup COMMAND       Back up local state automatically
   delete NAME          Delete a named context (alias: rm)
 
 Run "contextctl help context COMMAND" for command options.
@@ -1666,6 +1687,43 @@ Options:
 `)
 			default:
 				fmt.Printf("Unknown sync direction %q.\n", args[2])
+			}
+		case "backup":
+			if len(args) == 2 {
+				fmt.Print(`Usage: contextctl context backup COMMAND NAME [options]
+
+Commands:
+  start NAME           Start automatic one-way backup
+  stop NAME            Stop automatic backup
+  status NAME          Show backup state and the latest result
+  run NAME             Run the backup worker in the foreground
+`)
+				return
+			}
+			switch args[2] {
+			case "start":
+				fmt.Print(`Usage: contextctl context backup start NAME --to TARGET [options]
+
+Targets:
+  s3://bucket/prefix
+  pvc://namespace/context-name
+
+Options:
+  --interval DURATION   Periodic backup interval (default 5m)
+  --debounce DURATION   Delay after harness capture events (default 2s)
+`)
+			case "stop":
+				fmt.Print("Usage: contextctl context backup stop NAME\n")
+			case "status":
+				fmt.Print("Usage: contextctl context backup status NAME [--json]\n")
+			case "run":
+				fmt.Print(`Usage: contextctl context backup run NAME
+
+Run the configured backup worker in the foreground. This is useful for containers,
+service managers, and troubleshooting.
+`)
+			default:
+				fmt.Printf("Unknown backup command %q.\n", args[2])
 			}
 		case "delete", "rm":
 			fmt.Print("Usage: contextctl context delete NAME [--namespace NAME]\n")
