@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/pool"
@@ -48,6 +49,9 @@ func (f *fakeManager) GetContext(_ context.Context, namespace, name string) (con
 	return contextresource.Resource{Name: name, Namespace: namespace, Type: "workspace", Status: "ready"}, nil
 }
 func (f *fakeManager) DeleteContext(_ context.Context, _, _ string) error { return nil }
+func (f *fakeManager) PublishContextRevision(_ context.Context, namespace, name string, revision contextresource.Revision) (contextresource.Resource, error) {
+	return contextresource.Resource{Name: name, Namespace: namespace, CurrentRevision: revision.ID, Revisions: []contextresource.Revision{revision}}, nil
+}
 func (f *fakeManager) ListStorageClasses(_ context.Context) ([]storageclass.Resource, error) {
 	return []storageclass.Resource{{Name: "fast", Default: true, Provisioner: "example.csi.io", VolumeBindingMode: "WaitForFirstConsumer", ReclaimPolicy: "Delete", AllowVolumeExpansion: true}}, nil
 }
@@ -115,6 +119,17 @@ func TestListContexts(t *testing.T) {
 	response := httptest.NewRecorder()
 	NewHandler(&fakeManager{}).ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"name":"research"`)) {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestPublishContextRevision(t *testing.T) {
+	digest := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	body := []byte(`{"id":"` + digest + `","createdAt":"` + time.Now().UTC().Format(time.RFC3339Nano) + `","operation":"sync","producer":"contextctl"}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/namespaces/team1/contexts/research/revisions", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	NewHandler(&fakeManager{}).ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(digest)) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }

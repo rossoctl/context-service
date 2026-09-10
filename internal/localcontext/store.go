@@ -22,15 +22,17 @@ var (
 )
 
 type Manifest struct {
-	Version     int                   `json:"version"`
-	Name        string                `json:"name"`
-	Type        string                `json:"type"`
-	Backend     string                `json:"backend"`
-	Path        string                `json:"-"`
-	CreatedAt   time.Time             `json:"createdAt"`
-	Captures    map[string]Capture    `json:"captures,omitempty"`
-	Attachments map[string]Attachment `json:"attachments,omitempty"`
-	Derivation  *Derivation           `json:"derivation,omitempty"`
+	Version         int                   `json:"version"`
+	Name            string                `json:"name"`
+	Type            string                `json:"type"`
+	Backend         string                `json:"backend"`
+	Path            string                `json:"-"`
+	CreatedAt       time.Time             `json:"createdAt"`
+	Captures        map[string]Capture    `json:"captures,omitempty"`
+	Attachments     map[string]Attachment `json:"attachments,omitempty"`
+	Derivation      *Derivation           `json:"derivation,omitempty"`
+	CurrentRevision string                `json:"currentRevision,omitempty"`
+	Revisions       []PublishedRevision   `json:"revisions,omitempty"`
 }
 
 type Derivation struct {
@@ -40,6 +42,27 @@ type Derivation struct {
 	Sources        []SourceReference `json:"sources,omitempty"`
 	GeneratedAt    time.Time         `json:"generatedAt"`
 	Generator      string            `json:"generator"`
+	Parameters     map[string]string `json:"parameters,omitempty"`
+}
+
+// PublishedRevision records a content-addressed point in a context's history.
+// ID is the SHA-256 identity of the portable context content.
+type PublishedRevision struct {
+	ID         string            `json:"id"`
+	CreatedAt  time.Time         `json:"createdAt"`
+	Operation  string            `json:"operation"`
+	Producer   string            `json:"producer,omitempty"`
+	Parameters map[string]string `json:"parameters,omitempty"`
+	Sources    []SourceReference `json:"sources,omitempty"`
+	Files      int               `json:"files"`
+	Bytes      int64             `json:"bytes"`
+}
+
+type RevisionMetadata struct {
+	Operation  string
+	Producer   string
+	Parameters map[string]string
+	Sources    []SourceReference
 }
 
 type SourceReference struct {
@@ -156,7 +179,7 @@ func (s *Store) List() ([]Manifest, error) {
 }
 
 func (s *Store) CaptureClaude(name, projectPath, claudeHome string) (Capture, error) {
-	manifest, err := s.Get(name)
+	_, err := s.Get(name)
 	if err != nil {
 		return Capture{}, err
 	}
@@ -173,6 +196,10 @@ func (s *Store) CaptureClaude(name, projectPath, claudeHome string) (Capture, er
 		return Capture{}, err
 	}
 	defer unlock()
+	manifest, err := s.Get(name)
+	if err != nil {
+		return Capture{}, err
+	}
 
 	target := filepath.Join(s.contextDir(name), "harnesses", "claude", "project")
 	stats, err := replaceTree(source, target)
@@ -184,6 +211,9 @@ func (s *Store) CaptureClaude(name, projectPath, claudeHome string) (Capture, er
 		Sessions: countSessions(target), Files: stats.files, Bytes: stats.bytes,
 	}
 	manifest.Captures["claude"] = capture
+	if _, err := s.recordRevisionUnlocked(&manifest, RevisionMetadata{Operation: "capture", Producer: "claude"}); err != nil {
+		return Capture{}, err
+	}
 	if err := s.writeManifest(manifest); err != nil {
 		return Capture{}, err
 	}

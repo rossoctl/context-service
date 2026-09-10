@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/rossoctl/context-service/internal/contextresource"
 	corev1 "k8s.io/api/core/v1"
@@ -41,5 +42,31 @@ func TestManagerCreatesGetsAndDeletesWorkspaceContext(t *testing.T) {
 	}
 	if err := manager.DeleteContext(context.Background(), "team1", "research"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestManagerPublishesContextRevision(t *testing.T) {
+	manager := &Manager{core: kubernetesfake.NewSimpleClientset()}
+	request := contextresource.CreateRequest{
+		Name: "research", Namespace: "team1", Type: "state",
+		Storage: contextresource.Storage{Backend: "pvc", Size: "1Gi", AccessMode: "ReadWriteOnce"},
+	}
+	if _, err := manager.CreateContext(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	revision := contextresource.Revision{ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CreatedAt: time.Now().UTC(), Operation: "sync", Producer: "contextctl"}
+	published, err := manager.PublishContextRevision(context.Background(), "team1", "research", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published.CurrentRevision != revision.ID || len(published.Revisions) != 1 {
+		t.Fatalf("published context = %+v", published)
+	}
+	if _, err := manager.PublishContextRevision(context.Background(), "team1", "research", revision); err != nil {
+		t.Fatal(err)
+	}
+	got, err := manager.GetContext(context.Background(), "team1", "research")
+	if err != nil || len(got.Revisions) != 1 {
+		t.Fatalf("duplicate publication = %+v, err = %v", got.Revisions, err)
 	}
 }

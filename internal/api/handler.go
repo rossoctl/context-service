@@ -44,8 +44,61 @@ func NewHandler(manager interface {
 	mux.HandleFunc("GET /v1/storage-classes", h.listStorageClasses)
 	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts", h.listContexts)
 	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}", h.getContext)
+	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}/revisions", h.listContextRevisions)
+	mux.HandleFunc("POST /v1/namespaces/{namespace}/contexts/{name}/revisions", h.publishContextRevision)
 	mux.HandleFunc("DELETE /v1/namespaces/{namespace}/contexts/{name}", h.deleteContext)
 	return mux
+}
+
+func (h *handler) listContextRevisions(w http.ResponseWriter, r *http.Request) {
+	result, err := h.manager.GetContext(r.Context(), r.PathValue("namespace"), r.PathValue("name"))
+	if err != nil {
+		writeContextError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, contextresource.RevisionList{Items: result.Revisions})
+}
+
+func (h *handler) publishContextRevision(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	var revision contextresource.Revision
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&revision); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateRevision(revision); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := h.manager.PublishContextRevision(r.Context(), r.PathValue("namespace"), r.PathValue("name"), revision)
+	if err != nil {
+		writeContextError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func validateRevision(revision contextresource.Revision) error {
+	if matched, _ := regexp.MatchString(`^[0-9a-f]{64}$`, revision.ID); !matched {
+		return errors.New("revision id must be a lowercase SHA-256 digest")
+	}
+	if revision.CreatedAt.IsZero() {
+		return errors.New("revision creation time is required")
+	}
+	if strings.TrimSpace(revision.Operation) == "" {
+		return errors.New("revision operation is required")
+	}
+	for _, source := range revision.Sources {
+		if source.Context == "" || source.Type == "" {
+			return errors.New("revision sources require context and type")
+		}
+		if matched, _ := regexp.MatchString(`^[0-9a-f]{64}$`, source.Revision); !matched {
+			return errors.New("source revision must be a lowercase SHA-256 digest")
+		}
+	}
+	return nil
 }
 
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {

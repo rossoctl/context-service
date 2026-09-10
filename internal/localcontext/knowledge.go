@@ -65,7 +65,7 @@ func (s *Store) KnowledgeRecords(name string) ([]KnowledgeRecord, error) {
 	return records, nil
 }
 
-func (s *Store) WriteKnowledge(name string, sources []GenerationSource, generator string, records []KnowledgeRecord) (Manifest, error) {
+func (s *Store) WriteKnowledge(name string, sources []GenerationSource, generator string, records []KnowledgeRecord, transformationParameters ...map[string]string) (Manifest, error) {
 	if err := validateName(name); err != nil {
 		return Manifest{}, err
 	}
@@ -107,6 +107,16 @@ func (s *Store) WriteKnowledge(name string, sources []GenerationSource, generato
 		references = append(references, SourceReference{Context: source.Name, Type: source.Type, Revision: source.Revision.Digest})
 	}
 
+	var prior Manifest
+	if existing, getErr := s.Get(name); getErr == nil {
+		if existing.Type != "knowledge" {
+			return Manifest{}, ErrAlreadyExists
+		}
+		prior = existing
+	} else if !errors.Is(getErr, ErrNotFound) {
+		return Manifest{}, getErr
+	}
+	parameters := firstParameters(transformationParameters)
 	staging, err := os.MkdirTemp(s.root, ".context-knowledge-")
 	if err != nil {
 		return Manifest{}, err
@@ -120,7 +130,12 @@ func (s *Store) WriteKnowledge(name string, sources []GenerationSource, generato
 	manifest := Manifest{
 		Version: manifestVersion, Name: name, Type: "knowledge", Backend: "filesystem",
 		CreatedAt: s.now().UTC(), Captures: map[string]Capture{}, Attachments: map[string]Attachment{},
-		Derivation: &Derivation{Sources: references, GeneratedAt: s.now().UTC(), Generator: generator},
+		Derivation: &Derivation{Sources: references, GeneratedAt: s.now().UTC(), Generator: generator, Parameters: parameters},
+	}
+	if prior.Name != "" {
+		manifest.CreatedAt = prior.CreatedAt
+		manifest.CurrentRevision = prior.CurrentRevision
+		manifest.Revisions = append([]PublishedRevision(nil), prior.Revisions...)
 	}
 	if err := s.writeManifestAt(staging, manifest); err != nil {
 		return Manifest{}, err
@@ -146,8 +161,12 @@ func (s *Store) WriteKnowledge(name string, sources []GenerationSource, generato
 		return Manifest{}, err
 	}
 	installed = true
-	manifest.Path = s.contextDir(name)
-	return manifest, nil
+	if _, err := s.PublishRevision(name, RevisionMetadata{
+		Operation: "derive", Producer: generator, Parameters: parameters, Sources: references,
+	}); err != nil {
+		return Manifest{}, err
+	}
+	return s.Get(name)
 }
 
 func (s *Store) SearchKnowledge(name, query string, limit int) ([]KnowledgeSearchResult, error) {

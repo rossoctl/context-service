@@ -16,6 +16,8 @@ selector for routing work.
 | `POST` | `/v1/contexts` | Create a named PVC-backed context resource |
 | `GET` | `/v1/namespaces/{namespace}/contexts` | List named context resources |
 | `GET` | `/v1/namespaces/{namespace}/contexts/{name}` | Read a named context resource |
+| `GET` | `/v1/namespaces/{namespace}/contexts/{name}/revisions` | List published context revisions |
+| `POST` | `/v1/namespaces/{namespace}/contexts/{name}/revisions` | Publish a verified context revision |
 | `DELETE` | `/v1/namespaces/{namespace}/contexts/{name}` | Delete a named context resource |
 | `POST` | `/v1/sandbox-pools` | Create an allocation |
 | `GET` | `/v1/sandbox-pools` | List allocations |
@@ -93,6 +95,10 @@ Creation returns the stable PVC attachment that a runtime can mount:
 
 Deletion removes the managed PVC. Consumers should treat `attachment.kind` as a discriminator so
 future storage backends can use a different attachment contract.
+
+Successful sync publishes a content-addressed revision containing its creation time, producer,
+source revisions, transformation parameters, and file totals. `GET .../revisions` returns the
+ordered history without mounting the PVC. See [Context revisions and provenance](context-revisions.md).
 
 ## Sandbox-pool create request
 

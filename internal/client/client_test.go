@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/pool"
 )
 
@@ -95,6 +97,24 @@ func TestContextResourcePaths(t *testing.T) {
 			name: "delete", method: http.MethodDelete, path: "/v1/namespaces/team1/contexts/demo",
 			call: func(c *Client) error {
 				return c.DeleteContext(context.Background(), "team1", "demo")
+			},
+		},
+		{
+			name: "list revisions", method: http.MethodGet, path: "/v1/namespaces/team1/contexts/demo/revisions",
+			body: `{"items":[]}`,
+			call: func(c *Client) error {
+				_, err := c.ListContextRevisions(context.Background(), "team1", "demo")
+				return err
+			},
+		},
+		{
+			name: "publish revision", method: http.MethodPost, path: "/v1/namespaces/team1/contexts/demo/revisions",
+			body: `{"name":"demo","namespace":"team1","currentRevision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","storage":{},"attachment":{}}`,
+			call: func(c *Client) error {
+				_, err := c.PublishContextRevision(context.Background(), "team1", "demo", contextresource.Revision{
+					ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CreatedAt: time.Now(), Operation: "sync",
+				})
+				return err
 			},
 		},
 	}

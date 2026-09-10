@@ -106,7 +106,7 @@ func (s *Store) contextForGeneration(name string, maxTextBytes int64, allowedTyp
 	return GenerationSource{Name: name, Type: manifest.Type, Revision: revision, Content: content.String(), Files: files}, nil
 }
 
-func (s *Store) CreateDerivedMemory(name string, source GenerationSource, generator, memory string) (Manifest, error) {
+func (s *Store) CreateDerivedMemory(name string, source GenerationSource, generator, memory string, transformationParameters ...map[string]string) (Manifest, error) {
 	if err := validateName(name); err != nil {
 		return Manifest{}, err
 	}
@@ -136,12 +136,13 @@ func (s *Store) CreateDerivedMemory(name string, source GenerationSource, genera
 			_ = os.RemoveAll(staging)
 		}
 	}()
+	parameters := firstParameters(transformationParameters)
 	manifest := Manifest{
 		Version: manifestVersion, Name: name, Type: "memory", Backend: "filesystem",
 		CreatedAt: s.now().UTC(), Captures: map[string]Capture{}, Attachments: map[string]Attachment{},
 		Derivation: &Derivation{
 			SourceContext: source.Name, SourceType: source.Type, SourceRevision: source.Revision.Digest,
-			GeneratedAt: s.now().UTC(), Generator: generator,
+			GeneratedAt: s.now().UTC(), Generator: generator, Parameters: parameters,
 		},
 	}
 	if err := s.writeManifestAt(staging, manifest); err != nil {
@@ -158,6 +159,24 @@ func (s *Store) CreateDerivedMemory(name string, source GenerationSource, genera
 		return Manifest{}, err
 	}
 	installed = true
-	manifest.Path = destination
+	revision, err := s.PublishRevision(name, RevisionMetadata{
+		Operation: "derive", Producer: generator, Parameters: parameters,
+		Sources: []SourceReference{{Context: source.Name, Type: source.Type, Revision: source.Revision.Digest}},
+	})
+	if err != nil {
+		return Manifest{}, err
+	}
+	manifest, err = s.Get(name)
+	if err != nil {
+		return Manifest{}, err
+	}
+	manifest.CurrentRevision = revision.ID
 	return manifest, nil
+}
+
+func firstParameters(values []map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	return cloneStringMap(values[0])
 }
