@@ -272,6 +272,8 @@ func contextCommand(c *client.Client, args []string) error {
 		return syncContext(c, args[1:])
 	case "backup":
 		return backupCommand(c, args[1:])
+	case "derive":
+		return deriveContext(args[1:])
 	default:
 		return fmt.Errorf("unknown context command %q; run 'contextctl help context'", args[0])
 	}
@@ -946,7 +948,17 @@ func printLocalContext(value localcontext.Manifest, jsonOutput bool) {
 	}
 	fmt.Printf("%s  ready · %s · filesystem\n", value.Name, value.Type)
 	fmt.Printf("└── path  %s\n", value.Path)
+	printLocalDerivation(value)
 	printLocalHarnesses(value)
+}
+
+func printLocalDerivation(value localcontext.Manifest) {
+	if value.Type == "memory" {
+		fmt.Printf("    └── memory  %s\n", memoryPath(value))
+	}
+	if value.Derivation != nil {
+		fmt.Printf("    └── source  %s@%s · %s\n", value.Derivation.SourceContext, shortRevision(value.Derivation.SourceRevision), value.Derivation.Generator)
+	}
 }
 
 func printLocalHarnesses(value localcontext.Manifest) {
@@ -982,6 +994,7 @@ func printContextInventory(localItems []localcontext.Manifest, kubernetesItems [
 		}
 		fmt.Printf("%s  Ready · %s\n", item.Name, item.Type)
 		fmt.Printf("└── path  %s\n", item.Path)
+		printLocalDerivation(item)
 		printLocalHarnesses(item)
 	}
 
@@ -1554,6 +1567,7 @@ Commands:
   import FILE          Import a portable .context bundle
   sync push|pull       Transfer state between local and remote storage
   backup COMMAND       Back up local state automatically
+  derive memory        Generate durable memory from captured state
   delete NAME          Delete a named context (alias: rm)
 
 Run "contextctl help context COMMAND" for command options.
@@ -1724,6 +1738,27 @@ service managers, and troubleshooting.
 `)
 			default:
 				fmt.Printf("Unknown backup command %q.\n", args[2])
+			}
+		case "derive":
+			if len(args) == 2 {
+				fmt.Print(`Usage: contextctl context derive memory SOURCE [options]
+
+Generate a separate long-term memory context from captured state.
+`)
+				return
+			}
+			switch args[2] {
+			case "memory":
+				fmt.Print(`Usage: contextctl context derive memory SOURCE [options]
+
+Options:
+  --name NAME           Memory context name (default SOURCE-memory)
+  --agent NAME          claude or codex (default claude)
+  --model NAME          Optional model override
+  --max-input BYTES     Maximum captured text bytes (default 2097152)
+`)
+			default:
+				fmt.Printf("Unknown derived context %q.\n", args[2])
 			}
 		case "delete", "rm":
 			fmt.Print("Usage: contextctl context delete NAME [--namespace NAME]\n")

@@ -8,7 +8,7 @@ Service storage.
 `contextctl ctx export NAME` creates a compressed `.context` bundle containing:
 
 - the context manifest;
-- native harness state under `harnesses/`; and
+- native harness state under `harnesses/` or derived `memory/`, `knowledge/`, and `artifacts/` content; and
 - a SHA-256 inventory in `checksums.json`.
 
 Machine-specific attachments and paths are not used to attach the imported context. Import verifies

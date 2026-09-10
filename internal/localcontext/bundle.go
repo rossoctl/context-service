@@ -25,6 +25,8 @@ const (
 	maxBundleEntries    = 100_000
 )
 
+var portableRoots = []string{"harnesses", "memory", "knowledge", "artifacts"}
+
 type Bundle struct {
 	FormatVersion int    `json:"formatVersion"`
 	Name          string `json:"name"`
@@ -38,6 +40,12 @@ type Revision struct {
 	Digest string
 	Files  int
 	Bytes  int64
+}
+
+type revisionEntry struct {
+	path     string
+	checksum string
+	size     int64
 }
 
 // Revision identifies the portable content of a context. Capture timestamps
@@ -54,43 +62,45 @@ func (s *Store) Revision(name string) (Revision, error) {
 	}
 	defer unlock()
 
-	type entry struct {
-		path     string
-		checksum string
-		size     int64
-	}
-	var entries []entry
-	root := filepath.Join(s.contextDir(name), "harnesses")
-	err = filepath.WalkDir(root, func(filePath string, item fs.DirEntry, walkErr error) error {
-		if errors.Is(walkErr, os.ErrNotExist) && filePath == root {
-			return fs.SkipDir
-		}
-		if walkErr != nil {
-			return walkErr
-		}
-		if item.IsDir() {
+	return s.revisionUnlocked(manifest)
+}
+
+func (s *Store) revisionUnlocked(manifest Manifest) (Revision, error) {
+	var entries []revisionEntry
+	contextRoot := s.contextDir(manifest.Name)
+	for _, rootName := range portableRoots {
+		root := filepath.Join(contextRoot, rootName)
+		err := filepath.WalkDir(root, func(filePath string, item fs.DirEntry, walkErr error) error {
+			if errors.Is(walkErr, os.ErrNotExist) && filePath == root {
+				return fs.SkipDir
+			}
+			if walkErr != nil {
+				return walkErr
+			}
+			if item.IsDir() {
+				return nil
+			}
+			info, err := item.Info()
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("cannot hash non-regular context file: %s", filePath)
+			}
+			relative, err := filepath.Rel(contextRoot, filePath)
+			if err != nil {
+				return err
+			}
+			digest, err := checksumFile(filePath)
+			if err != nil {
+				return err
+			}
+			entries = append(entries, revisionEntry{path: filepath.ToSlash(relative), checksum: digest, size: info.Size()})
 			return nil
+		})
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return Revision{}, err
 		}
-		info, err := item.Info()
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("cannot hash non-regular context file: %s", filePath)
-		}
-		relative, err := filepath.Rel(root, filePath)
-		if err != nil {
-			return err
-		}
-		digest, err := checksumFile(filePath)
-		if err != nil {
-			return err
-		}
-		entries = append(entries, entry{path: filepath.ToSlash(relative), checksum: digest, size: info.Size()})
-		return nil
-	})
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return Revision{}, err
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].path < entries[j].path })
 	hash := sha256.New()
@@ -120,6 +130,7 @@ type bundleFile struct {
 
 // Export writes a portable, gzip-compressed .context bundle. Attachments are
 // deliberately omitted because hooks and project paths are machine-local.
+// Native harness state and derived context content are included.
 func (s *Store) Export(name, outputPath string) (Bundle, error) {
 	manifest, err := s.Get(name)
 	if err != nil {
@@ -155,39 +166,41 @@ func (s *Store) Export(name, outputPath string) (Bundle, error) {
 		size: int64(len(manifestData)), checksum: checksumBytes(manifestData),
 	}}
 
-	harnessRoot := filepath.Join(s.contextDir(name), "harnesses")
-	if err := filepath.WalkDir(harnessRoot, func(filePath string, entry fs.DirEntry, walkErr error) error {
-		if errors.Is(walkErr, os.ErrNotExist) && filePath == harnessRoot {
-			return fs.SkipDir
-		}
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
+	for _, rootName := range portableRoots {
+		root := filepath.Join(s.contextDir(name), rootName)
+		if err := filepath.WalkDir(root, func(filePath string, entry fs.DirEntry, walkErr error) error {
+			if errors.Is(walkErr, os.ErrNotExist) && filePath == root {
+				return fs.SkipDir
+			}
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("cannot export non-regular file: %s", filePath)
+			}
+			relative, err := filepath.Rel(s.contextDir(name), filePath)
+			if err != nil {
+				return err
+			}
+			checksum, err := checksumFile(filePath)
+			if err != nil {
+				return err
+			}
+			files = append(files, bundleFile{
+				name: filepath.ToSlash(relative), sourcePath: filePath,
+				mode: info.Mode().Perm(), size: info.Size(), checksum: checksum,
+			})
 			return nil
+		}); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return Bundle{}, err
 		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("cannot export non-regular file: %s", filePath)
-		}
-		relative, err := filepath.Rel(s.contextDir(name), filePath)
-		if err != nil {
-			return err
-		}
-		checksum, err := checksumFile(filePath)
-		if err != nil {
-			return err
-		}
-		files = append(files, bundleFile{
-			name: filepath.ToSlash(relative), sourcePath: filePath,
-			mode: info.Mode().Perm(), size: info.Size(), checksum: checksum,
-		})
-		return nil
-	}); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return Bundle{}, err
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
 
@@ -450,7 +463,14 @@ func safeBundlePath(value string) (string, error) {
 	if value == "" || value != cleaned || strings.Contains(value, `\`) || strings.HasPrefix(value, "/") || value == "." || value == ".." || strings.HasPrefix(value, "../") {
 		return "", fmt.Errorf("unsafe context bundle path: %q", value)
 	}
-	if value != "manifest.json" && value != "checksums.json" && value != "harnesses" && !strings.HasPrefix(value, "harnesses/") {
+	allowed := value == "manifest.json" || value == "checksums.json"
+	for _, root := range portableRoots {
+		if value == root || strings.HasPrefix(value, root+"/") {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
 		return "", fmt.Errorf("unexpected context bundle path: %q", value)
 	}
 	return value, nil
