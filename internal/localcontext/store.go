@@ -30,6 +30,15 @@ type Manifest struct {
 	CreatedAt   time.Time             `json:"createdAt"`
 	Captures    map[string]Capture    `json:"captures,omitempty"`
 	Attachments map[string]Attachment `json:"attachments,omitempty"`
+	Derivation  *Derivation           `json:"derivation,omitempty"`
+}
+
+type Derivation struct {
+	SourceContext  string    `json:"sourceContext"`
+	SourceType     string    `json:"sourceType"`
+	SourceRevision string    `json:"sourceRevision"`
+	GeneratedAt    time.Time `json:"generatedAt"`
+	Generator      string    `json:"generator"`
 }
 
 type Capture struct {
