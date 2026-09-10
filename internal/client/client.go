@@ -134,6 +134,16 @@ func (c *Client) ContextLifecycleCapabilities(ctx context.Context, namespace, na
 	return result, err
 }
 
+func (c *Client) PublishContextQueryIndex(ctx context.Context, namespace, name string, index contextresource.QueryIndex) error {
+	return c.do(ctx, http.MethodPut, contextPath(namespace, name)+"/query-index", index, nil)
+}
+
+func (c *Client) QueryContexts(ctx context.Context, namespace string, request contextresource.QueryRequest) (contextresource.QueryResponse, error) {
+	var result contextresource.QueryResponse
+	err := c.do(ctx, http.MethodPost, "/v1/namespaces/"+url.PathEscape(namespace)+"/query", request, &result)
+	return result, err
+}
+
 func (c *Client) DeleteContext(ctx context.Context, namespace, name string) error {
 	return c.do(ctx, http.MethodDelete, "/v1/namespaces/"+url.PathEscape(namespace)+"/contexts/"+url.PathEscape(name), nil, nil)
 }

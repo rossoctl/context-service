@@ -278,6 +278,8 @@ func contextCommand(c *client.Client, args []string) error {
 		return deriveContext(args[1:])
 	case "search":
 		return searchContext(args[1:])
+	case "query":
+		return queryContext(c, args[1:])
 	case "revisions":
 		return revisionsContext(c, args[1:])
 	case "snapshot", "snapshots":
@@ -721,6 +723,19 @@ func pushContextWithContext(ctx context.Context, c *client.Client, args []string
 	}
 	if _, err := c.PublishContextRevision(ctx, remote.Namespace, *remoteName, resourceRevision(local.Revisions[len(local.Revisions)-1])); err != nil {
 		return fmt.Errorf("publish remote revision: %w", err)
+	}
+	if local.Type == "memory" || local.Type == "knowledge" {
+		records, err := localContextStore().QueryRecords(name)
+		if err != nil {
+			return fmt.Errorf("build remote query index: %w", err)
+		}
+		for index := range records {
+			records[index].Context = *remoteName
+			records[index].Revision = local.CurrentRevision
+		}
+		if err := c.PublishContextQueryIndex(ctx, remote.Namespace, *remoteName, contextresource.QueryIndex{Revision: local.CurrentRevision, Records: records}); err != nil {
+			return fmt.Errorf("publish remote query index: %w", err)
+		}
 	}
 	fmt.Printf("Synced %s to pvc/%s in namespace %s\n", name, remote.Attachment.ClaimName, remote.Namespace)
 	fmt.Printf("Files: %d (%s)\n", bundle.Files, formatBytes(bundle.Bytes))
@@ -1639,6 +1654,7 @@ Commands:
   derive memory        Generate durable memory from captured state
   derive knowledge     Build searchable knowledge from state or memory
   search NAME QUERY    Search a local knowledge context
+  query QUERY          Query memory and knowledge contexts
   revisions NAME       Show local revision history
   snapshot COMMAND     Snapshot, clone, restore, and retain local context
   lineage NAME         Show derivation sources and availability
@@ -1900,6 +1916,23 @@ Options:
 				fmt.Printf("Unknown derived context %q.\n", args[2])
 			}
 		case "search":
+			fmt.Print(`Usage: contextctl context search NAME QUERY [--limit N] [--json]
+`)
+		case "query":
+			fmt.Print(`Usage: contextctl context query "TEXT" [options]
+
+Options:
+  --backend BACKEND     filesystem (default) or pvc
+  --context NAME        Query one context (repeatable)
+  --type TYPE           Filter by memory or knowledge (repeatable)
+  --source NAME         Filter by source context (repeatable)
+  --revision ID         Filter by context revision (repeatable)
+  --id ID               Look up an exact record ID (repeatable)
+  --limit N             Maximum results, 1-100 (default 20)
+  --cursor VALUE        Continue a previous query
+  --namespace NAME      Kubernetes namespace for pvc
+  --json                Print JSON
+`)
 			fmt.Print(`Usage: contextctl context search NAME QUERY [options]
 
 Search a local knowledge context and show source attribution.

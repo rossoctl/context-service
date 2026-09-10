@@ -18,6 +18,8 @@ selector for routing work.
 | `GET` | `/v1/namespaces/{namespace}/contexts/{name}` | Read a named context resource |
 | `GET` | `/v1/namespaces/{namespace}/contexts/{name}/revisions` | List published context revisions |
 | `POST` | `/v1/namespaces/{namespace}/contexts/{name}/revisions` | Publish a verified context revision |
+| `PUT` | `/v1/namespaces/{namespace}/contexts/{name}/query-index` | Publish query records for the current revision |
+| `POST` | `/v1/namespaces/{namespace}/query` | Query accessible memory and knowledge contexts |
 | `GET`, `PUT`, `DELETE` | `/v1/namespaces/{namespace}/contexts/{name}/grants` | Inspect, set, or revoke access |
 | `GET`, `PUT`, `DELETE` | `/v1/namespaces/{namespace}/contexts/{name}/consumers` | Inspect, attach, or detach consumers |
 | `GET` | `/v1/namespaces/{namespace}/contexts/{name}/audit` | Read grant and attachment events |
@@ -264,3 +266,14 @@ GET  /v1/namespaces/{namespace}/contexts/{name}/capabilities
 Lifecycle routes use the same subject header and access rules as contexts. Snapshot creation and
 restore require `write`, clone requires `derive`, inspection requires `read`, and retention or
 garbage collection requires `administer`.
+
+## Memory and knowledge query
+
+`POST /v1/namespaces/{namespace}/query` accepts query text or exact record IDs, optional context,
+type, source-context, and revision filters, a limit from 1 to 100, and an opaque cursor. Results are
+ordered by descending score and stable record identity. Each result contains both its owning
+context revision and source provenance. `unavailable` identifies authorized contexts whose index
+does not match their current revision.
+
+`PUT /v1/namespaces/{namespace}/contexts/{name}/query-index` publishes records for a successfully
+synced `memory` or `knowledge` revision. The revision must match the context's current revision.
