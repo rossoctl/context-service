@@ -8,10 +8,9 @@ export CS_URL=https://example.test/context-service
 export CS_TOKEN=replace-with-gateway-token
 ```
 
-The token shown here is enforced by an example ingress gateway, not Context Service; the service
-itself does not implement authentication (see [API](api.md)). `contextctl` sends this token as
-`X-SH-Auth`, matching a Serverless Harness-style gateway convention. Substitute whatever header
-your own gateway expects.
+The gateway authenticates the token and supplies the verified `X-Context-Subject` identity used by
+Context Service grants. The curl examples omit that deployment-specific identity injection. See
+[Context access and consumers](context-access.md).
 
 ## Health
 

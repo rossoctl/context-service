@@ -14,8 +14,11 @@ import (
 )
 
 type fakeManager struct {
-	created        pool.CreateRequest
-	createdContext contextresource.CreateRequest
+	created          pool.CreateRequest
+	createdContext   contextresource.CreateRequest
+	deniedSubject    string
+	deniedPermission contextresource.Permission
+	deleteErr        error
 }
 
 func (f *fakeManager) Create(_ context.Context, request pool.CreateRequest) (pool.Pool, error) {
@@ -48,9 +51,53 @@ func (f *fakeManager) ListContexts(_ context.Context, namespace string) ([]conte
 func (f *fakeManager) GetContext(_ context.Context, namespace, name string) (contextresource.Resource, error) {
 	return contextresource.Resource{Name: name, Namespace: namespace, Type: "workspace", Status: "ready"}, nil
 }
-func (f *fakeManager) DeleteContext(_ context.Context, _, _ string) error { return nil }
+func (f *fakeManager) DeleteContext(_ context.Context, _, _ string) error { return f.deleteErr }
 func (f *fakeManager) PublishContextRevision(_ context.Context, namespace, name string, revision contextresource.Revision) (contextresource.Resource, error) {
 	return contextresource.Resource{Name: name, Namespace: namespace, CurrentRevision: revision.ID, Revisions: []contextresource.Revision{revision}}, nil
+}
+func (f *fakeManager) ListAccessibleContexts(ctx context.Context, namespace string, subject contextresource.Subject) ([]contextresource.Resource, error) {
+	if subject.Name == f.deniedSubject {
+		return []contextresource.Resource{}, nil
+	}
+	return f.ListContexts(ctx, namespace)
+}
+func (f *fakeManager) AccessContext(ctx context.Context, namespace, name string, subject contextresource.Subject, permission contextresource.Permission) (contextresource.Resource, error) {
+	if subject.Name == f.deniedSubject || permission == f.deniedPermission {
+		return contextresource.Resource{}, contextresource.ErrNotFound
+	}
+	return f.GetContext(ctx, namespace, name)
+}
+
+func TestReadOnlySubjectCannotRegisterReadWriteConsumer(t *testing.T) {
+	body := bytes.NewBufferString(`{"kind":"agent","name":"reader","accessMode":"readWrite"}`)
+	request := httptest.NewRequest(http.MethodPut, "/v1/namespaces/team1/contexts/research/consumers", body)
+	request.Header.Set("X-Context-Subject", "agent:reader")
+	response := httptest.NewRecorder()
+	NewHandler(&fakeManager{deniedPermission: contextresource.PermissionWrite}).ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+func (f *fakeManager) ListContextGrants(_ context.Context, _, _ string) ([]contextresource.Grant, error) {
+	return nil, nil
+}
+func (f *fakeManager) SetContextGrant(_ context.Context, namespace, name string, _ contextresource.Grant, _ contextresource.Subject) (contextresource.Resource, error) {
+	return f.GetContext(context.Background(), namespace, name)
+}
+func (f *fakeManager) RevokeContextGrant(_ context.Context, namespace, name string, _, _ contextresource.Subject) (contextresource.Resource, error) {
+	return f.GetContext(context.Background(), namespace, name)
+}
+func (f *fakeManager) ListContextConsumers(_ context.Context, _, _ string) ([]contextresource.Consumer, error) {
+	return nil, nil
+}
+func (f *fakeManager) SetContextConsumer(_ context.Context, namespace, name string, _ contextresource.Consumer, _ bool, _ contextresource.Subject) (contextresource.Resource, error) {
+	return f.GetContext(context.Background(), namespace, name)
+}
+func (f *fakeManager) ListContextAudit(_ context.Context, _, _ string) ([]contextresource.AuditEvent, error) {
+	return nil, nil
+}
+func (f *fakeManager) ForceDeleteContext(ctx context.Context, namespace, name string) error {
+	return f.DeleteContext(ctx, namespace, name)
 }
 func (f *fakeManager) ListStorageClasses(_ context.Context) ([]storageclass.Resource, error) {
 	return []storageclass.Resource{{Name: "fast", Default: true, Provisioner: "example.csi.io", VolumeBindingMode: "WaitForFirstConsumer", ReclaimPolicy: "Delete", AllowVolumeExpansion: true}}, nil
@@ -83,6 +130,47 @@ func TestCreateWorkspaceContext(t *testing.T) {
 	}
 	if manager.createdContext.Namespace != "team1" || manager.createdContext.Type != "workspace" || manager.createdContext.Storage.AccessMode != "ReadWriteMany" {
 		t.Fatalf("unexpected context request: %#v", manager.createdContext)
+	}
+}
+
+func TestCreateContextRecordsAuthenticatedOwner(t *testing.T) {
+	manager := &fakeManager{}
+	body := []byte(`{"name":"research","namespace":"team1","type":"state","storage":{"backend":"pvc","size":"1Gi","accessMode":"ReadWriteOnce"}}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/contexts", bytes.NewReader(body))
+	request.Header.Set("X-Context-Subject", "agent:researcher")
+	response := httptest.NewRecorder()
+	NewHandler(manager).ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if manager.createdContext.Owner != (contextresource.Subject{Kind: "agent", Name: "researcher"}) {
+		t.Fatalf("owner = %+v", manager.createdContext.Owner)
+	}
+}
+
+func TestUnauthorizedContextIsHiddenFromListAndGet(t *testing.T) {
+	manager := &fakeManager{deniedSubject: "outsider"}
+	for _, path := range []string{"/v1/namespaces/team1/contexts", "/v1/namespaces/team1/contexts/research"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("X-Context-Subject", "agent:outsider")
+		response := httptest.NewRecorder()
+		NewHandler(manager).ServeHTTP(response, request)
+		if path == "/v1/namespaces/team1/contexts" {
+			if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"items":[]`)) {
+				t.Fatalf("list status = %d, body = %s", response.Code, response.Body.String())
+			}
+		} else if response.Code != http.StatusNotFound {
+			t.Fatalf("get status = %d, body = %s", response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestDeleteInUseReturnsConflict(t *testing.T) {
+	request := httptest.NewRequest(http.MethodDelete, "/v1/namespaces/team1/contexts/research", nil)
+	response := httptest.NewRecorder()
+	NewHandler(&fakeManager{deleteErr: contextresource.ErrInUse}).ServeHTTP(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 

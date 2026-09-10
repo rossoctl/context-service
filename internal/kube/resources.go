@@ -3,6 +3,7 @@ package kube
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/pool"
@@ -24,6 +25,10 @@ func buildContextPVC(request contextresource.CreateRequest) *corev1.PersistentVo
 			},
 		},
 	}
+	createdAt := time.Now().UTC()
+	owner := normalizeOwner(request.Owner)
+	_ = writeAnnotation(pvc, grantsAnnotation, []contextresource.Grant{ownerGrant(owner, createdAt)})
+	_ = writeAnnotation(pvc, auditAnnotation, []contextresource.AuditEvent{{Time: createdAt, Action: "context.created", Subject: owner}})
 	if request.Storage.StorageClass != "" {
 		pvc.Spec.StorageClassName = &request.Storage.StorageClass
 	}

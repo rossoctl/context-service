@@ -52,6 +52,7 @@ Quick start:
 Environment:
   CS_URL                 Service URL (default http://localhost:8080)
   CS_TOKEN               Gateway token for public access
+  CS_SUBJECT             Authenticated identity as kind:name (default user:anonymous)
   CS_NAMESPACE           Default context namespace (default serverless-harness)
   CS_STORAGE_CLASS       Default storage class for create
   CS_CONTEXT_HOME        Local context directory (default ~/.contexts)
@@ -80,6 +81,7 @@ func run(args []string) error {
 	}
 	baseURL := envOr("CS_URL", "http://localhost:8080")
 	c := client.New(baseURL, os.Getenv("CS_TOKEN"), &http.Client{Timeout: 30 * time.Second})
+	c.SetSubject(os.Getenv("CS_SUBJECT"))
 	switch args[0] {
 	case "health":
 		if err := c.Health(context.Background()); err != nil {
@@ -280,6 +282,18 @@ func contextCommand(c *client.Client, args []string) error {
 		return revisionsContext(c, args[1:])
 	case "lineage":
 		return lineageContext(args[1:])
+	case "access":
+		return contextAccess(c, args[1:])
+	case "grant":
+		return contextGrant(c, args[1:])
+	case "grants":
+		return contextGrants(c, args[1:])
+	case "revoke":
+		return contextRevoke(c, args[1:])
+	case "consumers":
+		return contextConsumers(c, args[1:])
+	case "audit":
+		return contextAudit(c, args[1:])
 	default:
 		return fmt.Errorf("unknown context command %q; run 'contextctl help context'", args[0])
 	}
@@ -1145,13 +1159,20 @@ func formatTransferElapsed(value time.Duration) string {
 func removeContext(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context delete", flag.ContinueOnError)
 	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	force := flags.Bool("force", false, "delete despite active or declared consumers")
 	flags.Usage = func() { showHelp([]string{"context", "delete"}) }
 	name, err := parseContextName(flags, args)
 	if err != nil {
 		return err
 	}
-	if err := c.DeleteContext(context.Background(), *namespace, name); err != nil {
-		return err
+	var deleteErr error
+	if *force {
+		deleteErr = c.ForceDeleteContext(context.Background(), *namespace, name)
+	} else {
+		deleteErr = c.DeleteContext(context.Background(), *namespace, name)
+	}
+	if deleteErr != nil {
+		return deleteErr
 	}
 	fmt.Println("deleted", name)
 	return nil
@@ -1489,6 +1510,13 @@ func writeContexts(w io.Writer, items []contextresource.Resource) {
 		fmt.Fprintf(w, "└── %s/%s  %s %s · %s\n", strings.ToLower(item.Attachment.Kind),
 			item.Attachment.ClaimName, item.Storage.Size, shortMode(item.Storage.AccessMode),
 			storageClassName(item.Storage.StorageClass))
+		if len(item.EffectiveAccess) > 0 {
+			mode := "read-only"
+			if hasPermission(item.EffectiveAccess, contextresource.PermissionWrite) {
+				mode = "read-write"
+			}
+			fmt.Fprintf(w, "    └── access  %s · %d consumers\n", mode, len(item.Consumers))
+		}
 	}
 }
 
@@ -1509,6 +1537,10 @@ func printContext(value contextresource.Resource, jsonOutput bool) {
 `, value.Name, value.Namespace, value.Type, value.Status, value.Storage.Size,
 		value.Storage.AccessMode, storageClassName(value.Storage.StorageClass),
 		strings.ToLower(value.Attachment.Kind), value.Attachment.ClaimName)
+	if len(value.EffectiveAccess) > 0 {
+		fmt.Printf("  Access:             %s\n", joinPermissions(value.EffectiveAccess))
+		fmt.Printf("  Consumers:          %d\n", len(value.Consumers))
+	}
 	if value.Status == "provisioning" {
 		fmt.Printf("\nInspect: kubectl -n %s get %s %s\n", value.Namespace,
 			strings.ToLower(value.Attachment.Kind), value.Attachment.ClaimName)
@@ -1607,6 +1639,12 @@ Commands:
   search NAME QUERY    Search a local knowledge context
   revisions NAME       Show local revision history
   lineage NAME         Show derivation sources and availability
+  access NAME          Show effective access and consumers
+  grant NAME           Grant a subject access to a PVC context
+  grants NAME          List access grants
+  revoke NAME          Revoke a subject's PVC context access
+  consumers NAME       Show declared and active PVC consumers
+  audit NAME           Show access and attachment events
   delete NAME          Delete a named context (alias: rm)
 
 Run "contextctl help context COMMAND" for command options.
@@ -1653,6 +1691,18 @@ Options:
 			fmt.Print("Usage: contextctl context revisions NAME [--backend pvc|filesystem] [--namespace NAME] [--json]\n")
 		case "lineage":
 			fmt.Print("Usage: contextctl context lineage NAME [--json]\n")
+		case "access":
+			fmt.Print("Usage: contextctl context access NAME [--namespace NAME] [--json]\n")
+		case "grant":
+			fmt.Print("Usage: contextctl context grant NAME --subject kind:name --permissions read,attach [--namespace NAME]\n")
+		case "grants":
+			fmt.Print("Usage: contextctl context grants NAME [--namespace NAME] [--json]\n")
+		case "revoke":
+			fmt.Print("Usage: contextctl context revoke NAME --subject kind:name [--namespace NAME]\n")
+		case "consumers":
+			fmt.Print("Usage: contextctl context consumers NAME [--namespace NAME] [--json]\n")
+		case "audit":
+			fmt.Print("Usage: contextctl context audit NAME [--namespace NAME] [--json]\n")
 		case "capture":
 			fmt.Print(`Usage: contextctl context capture NAME [options]
 
@@ -1823,7 +1873,7 @@ Options:
   --json                Print JSON
 `)
 		case "delete", "rm":
-			fmt.Print("Usage: contextctl context delete NAME [--namespace NAME]\n")
+			fmt.Print("Usage: contextctl context delete NAME [--namespace NAME] [--force]\n")
 		default:
 			fmt.Printf("Unknown context command %q.\n", args[1])
 		}

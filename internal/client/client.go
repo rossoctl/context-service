@@ -19,8 +19,11 @@ import (
 type Client struct {
 	baseURL string
 	token   string
+	subject string
 	http    *http.Client
 }
+
+func (c *Client) SetSubject(subject string) { c.subject = strings.TrimSpace(subject) }
 
 func New(baseURL, token string, httpClient *http.Client) *Client {
 	if httpClient == nil {
@@ -83,6 +86,54 @@ func (c *Client) DeleteContext(ctx context.Context, namespace, name string) erro
 	return c.do(ctx, http.MethodDelete, "/v1/namespaces/"+url.PathEscape(namespace)+"/contexts/"+url.PathEscape(name), nil, nil)
 }
 
+func (c *Client) ForceDeleteContext(ctx context.Context, namespace, name string) error {
+	return c.do(ctx, http.MethodDelete, "/v1/namespaces/"+url.PathEscape(namespace)+"/contexts/"+url.PathEscape(name)+"?force=true", nil, nil)
+}
+
+func (c *Client) ListContextGrants(ctx context.Context, namespace, name string) ([]contextresource.Grant, error) {
+	var result contextresource.GrantList
+	err := c.do(ctx, http.MethodGet, contextPath(namespace, name)+"/grants", nil, &result)
+	return result.Items, err
+}
+
+func (c *Client) SetContextGrant(ctx context.Context, namespace, name string, grant contextresource.Grant) (contextresource.Resource, error) {
+	var result contextresource.Resource
+	err := c.do(ctx, http.MethodPut, contextPath(namespace, name)+"/grants", grant, &result)
+	return result, err
+}
+
+func (c *Client) RevokeContextGrant(ctx context.Context, namespace, name string, subject contextresource.Subject) (contextresource.Resource, error) {
+	var result contextresource.Resource
+	err := c.do(ctx, http.MethodDelete, contextPath(namespace, name)+"/grants", subject, &result)
+	return result, err
+}
+
+func (c *Client) ListContextConsumers(ctx context.Context, namespace, name string) ([]contextresource.Consumer, error) {
+	var result contextresource.ConsumerList
+	err := c.do(ctx, http.MethodGet, contextPath(namespace, name)+"/consumers", nil, &result)
+	return result.Items, err
+}
+
+func (c *Client) SetContextConsumer(ctx context.Context, namespace, name string, consumer contextresource.Consumer, attached bool) (contextresource.Resource, error) {
+	method := http.MethodPut
+	if !attached {
+		method = http.MethodDelete
+	}
+	var result contextresource.Resource
+	err := c.do(ctx, method, contextPath(namespace, name)+"/consumers", consumer, &result)
+	return result, err
+}
+
+func (c *Client) ListContextAudit(ctx context.Context, namespace, name string) ([]contextresource.AuditEvent, error) {
+	var result contextresource.AuditList
+	err := c.do(ctx, http.MethodGet, contextPath(namespace, name)+"/audit", nil, &result)
+	return result.Items, err
+}
+
+func contextPath(namespace, name string) string {
+	return "/v1/namespaces/" + url.PathEscape(namespace) + "/contexts/" + url.PathEscape(name)
+}
+
 func (c *Client) ListContextRevisions(ctx context.Context, namespace, name string) ([]contextresource.Revision, error) {
 	var result contextresource.RevisionList
 	err := c.do(ctx, http.MethodGet, "/v1/namespaces/"+url.PathEscape(namespace)+"/contexts/"+url.PathEscape(name)+"/revisions", nil, &result)
@@ -113,6 +164,9 @@ func (c *Client) do(ctx context.Context, method, path string, input, output any)
 	}
 	if c.token != "" {
 		req.Header.Set("X-SH-Auth", c.token)
+	}
+	if c.subject != "" {
+		req.Header.Set("X-Context-Subject", c.subject)
 	}
 	response, err := c.http.Do(req)
 	if err != nil {

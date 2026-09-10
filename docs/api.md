@@ -18,6 +18,9 @@ selector for routing work.
 | `GET` | `/v1/namespaces/{namespace}/contexts/{name}` | Read a named context resource |
 | `GET` | `/v1/namespaces/{namespace}/contexts/{name}/revisions` | List published context revisions |
 | `POST` | `/v1/namespaces/{namespace}/contexts/{name}/revisions` | Publish a verified context revision |
+| `GET`, `PUT`, `DELETE` | `/v1/namespaces/{namespace}/contexts/{name}/grants` | Inspect, set, or revoke access |
+| `GET`, `PUT`, `DELETE` | `/v1/namespaces/{namespace}/contexts/{name}/consumers` | Inspect, attach, or detach consumers |
+| `GET` | `/v1/namespaces/{namespace}/contexts/{name}/audit` | Read grant and attachment events |
 | `DELETE` | `/v1/namespaces/{namespace}/contexts/{name}` | Delete a named context resource |
 | `POST` | `/v1/sandbox-pools` | Create an allocation |
 | `GET` | `/v1/sandbox-pools` | List allocations |
@@ -232,12 +235,14 @@ Successful deletion returns `204 No Content`.
 | `400` | `invalid_request` | Malformed or unsupported request |
 | `404` | `not_found` | Allocation not found |
 | `409` | `already_exists` | Allocation resources already exist |
+| `409` | `in_use` | Context has declared or active consumers |
 | `500` | `internal_error` | Kubernetes or service failure |
 
-The service does not currently implement authentication. A deployment may enforce authentication
-at its ingress gateway. `contextctl` sends its configured token as `X-SH-Auth` (see
-[API examples](api-examples.md)), matching a Serverless Harness-style gateway convention; adjust
-the gateway or the client if your deployment expects a different header.
+The service expects authentication at its ingress gateway. `contextctl` sends its configured token
+as `X-SH-Auth` and `CS_SUBJECT` as `X-Context-Subject`. A production gateway must strip untrusted
+subject headers and inject the authenticated `kind:name` identity. See [Context access and
+consumers](context-access.md) for grants, Kubernetes service-account mapping, discovery, and safe
+deletion.
 
 Object-storage artifact backends are not implemented. The current `artifacts` context type is
 PVC-backed classification only. See the [artifact storage proposal](artifacts-proposal.md).

@@ -10,6 +10,8 @@ var (
 	ErrAlreadyExists = errors.New("context resource already exists")
 	ErrNotFound      = errors.New("context resource not found")
 	ErrInvalid       = errors.New("invalid context resource")
+	ErrForbidden     = errors.New("context access denied")
+	ErrInUse         = errors.New("context resource is in use")
 )
 
 type CreateRequest struct {
@@ -17,6 +19,7 @@ type CreateRequest struct {
 	Namespace string  `json:"namespace"`
 	Type      string  `json:"type"`
 	Storage   Storage `json:"storage"`
+	Owner     Subject `json:"-"`
 }
 
 type Storage struct {
@@ -32,14 +35,66 @@ type Attachment struct {
 }
 
 type Resource struct {
-	Name            string     `json:"name"`
-	Namespace       string     `json:"namespace"`
-	Type            string     `json:"type"`
-	Status          string     `json:"status"`
-	Storage         Storage    `json:"storage"`
-	Attachment      Attachment `json:"attachment"`
-	CurrentRevision string     `json:"currentRevision,omitempty"`
-	Revisions       []Revision `json:"revisions,omitempty"`
+	Name            string       `json:"name"`
+	Namespace       string       `json:"namespace"`
+	Type            string       `json:"type"`
+	Status          string       `json:"status"`
+	Storage         Storage      `json:"storage"`
+	Attachment      Attachment   `json:"attachment"`
+	CurrentRevision string       `json:"currentRevision,omitempty"`
+	Revisions       []Revision   `json:"revisions,omitempty"`
+	EffectiveAccess []Permission `json:"effectiveAccess,omitempty"`
+	Consumers       []Consumer   `json:"consumers,omitempty"`
+}
+
+type Permission string
+
+const (
+	PermissionRead       Permission = "read"
+	PermissionWrite      Permission = "write"
+	PermissionAttach     Permission = "attach"
+	PermissionDerive     Permission = "derive"
+	PermissionAdminister Permission = "administer"
+)
+
+type Subject struct {
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+}
+
+type Grant struct {
+	Subject     Subject      `json:"subject"`
+	Permissions []Permission `json:"permissions"`
+	CreatedAt   time.Time    `json:"createdAt"`
+}
+
+type GrantList struct {
+	Items []Grant `json:"items"`
+}
+
+type Consumer struct {
+	Subject    Subject   `json:"subject"`
+	Kind       string    `json:"kind"`
+	Name       string    `json:"name"`
+	AccessMode string    `json:"accessMode"`
+	Active     bool      `json:"active"`
+	Desired    bool      `json:"desired"`
+	Since      time.Time `json:"since,omitempty"`
+}
+
+type ConsumerList struct {
+	Items []Consumer `json:"items"`
+}
+
+type AuditEvent struct {
+	Time    time.Time `json:"time"`
+	Action  string    `json:"action"`
+	Subject Subject   `json:"subject"`
+	Target  *Subject  `json:"target,omitempty"`
+}
+
+type AuditList struct {
+	Items []AuditEvent `json:"items"`
 }
 
 type SourceReference struct {
@@ -73,4 +128,13 @@ type Manager interface {
 	GetContext(context.Context, string, string) (Resource, error)
 	DeleteContext(context.Context, string, string) error
 	PublishContextRevision(context.Context, string, string, Revision) (Resource, error)
+	ListAccessibleContexts(context.Context, string, Subject) ([]Resource, error)
+	AccessContext(context.Context, string, string, Subject, Permission) (Resource, error)
+	ListContextGrants(context.Context, string, string) ([]Grant, error)
+	SetContextGrant(context.Context, string, string, Grant, Subject) (Resource, error)
+	RevokeContextGrant(context.Context, string, string, Subject, Subject) (Resource, error)
+	ListContextConsumers(context.Context, string, string) ([]Consumer, error)
+	SetContextConsumer(context.Context, string, string, Consumer, bool, Subject) (Resource, error)
+	ListContextAudit(context.Context, string, string) ([]AuditEvent, error)
+	ForceDeleteContext(context.Context, string, string) error
 }
