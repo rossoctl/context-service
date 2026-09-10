@@ -280,6 +280,8 @@ func contextCommand(c *client.Client, args []string) error {
 		return searchContext(args[1:])
 	case "query":
 		return queryContext(c, args[1:])
+	case "artifact", "artifacts":
+		return artifactCommand(args[1:])
 	case "revisions":
 		return revisionsContext(c, args[1:])
 	case "snapshot", "snapshots":
@@ -1655,6 +1657,7 @@ Commands:
   derive knowledge     Build searchable knowledge from state or memory
   search NAME QUERY    Search a local knowledge context
   query QUERY          Query memory and knowledge contexts
+  artifact COMMAND     Publish, list, and retrieve immutable artifacts
   revisions NAME       Show local revision history
   snapshot COMMAND     Snapshot, clone, restore, and retain local context
   lineage NAME         Show derivation sources and availability
@@ -1933,6 +1936,27 @@ Options:
   --namespace NAME      Kubernetes namespace for pvc
   --json                Print JSON
 `)
+		case "artifact", "artifacts":
+			if len(args) == 2 {
+				fmt.Print(`Usage: contextctl context artifact COMMAND [options]
+
+Commands:
+  publish CONTEXT PATH   Publish a file or directory
+  list CONTEXT           List immutable artifact versions
+  get CONTEXT NAME       Retrieve an artifact (use NAME@VERSION for an older version)
+`)
+				return
+			}
+			switch args[2] {
+			case "publish":
+				fmt.Print("Usage: contextctl context artifact publish CONTEXT PATH --from SOURCE [--producer NAME] [--media-type TYPE] [--json]\n")
+			case "list":
+				fmt.Print("Usage: contextctl context artifact list CONTEXT [--json]\n")
+			case "get":
+				fmt.Print("Usage: contextctl context artifact get CONTEXT NAME[@VERSION] [--output FILE] [--json]\n")
+			default:
+				fmt.Printf("Unknown artifact command %q.\n", args[2])
+			}
 			fmt.Print(`Usage: contextctl context search NAME QUERY [options]
 
 Search a local knowledge context and show source attribution.
