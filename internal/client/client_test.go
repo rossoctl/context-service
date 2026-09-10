@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,6 +147,20 @@ func TestContextResourcePaths(t *testing.T) {
 			body: `{"snapshots":true,"clones":true,"restore":false}`,
 			call: func(c *Client) error {
 				_, err := c.ContextLifecycleCapabilities(context.Background(), "team1", "demo")
+				return err
+			},
+		},
+		{
+			name: "publish query index", method: http.MethodPut, path: "/v1/namespaces/team1/contexts/demo/query-index",
+			call: func(c *Client) error {
+				return c.PublishContextQueryIndex(context.Background(), "team1", "demo", contextresource.QueryIndex{Revision: strings.Repeat("a", 64)})
+			},
+		},
+		{
+			name: "query contexts", method: http.MethodPost, path: "/v1/namespaces/team1/query",
+			body: `{"items":[]}`,
+			call: func(c *Client) error {
+				_, err := c.QueryContexts(context.Background(), "team1", contextresource.QueryRequest{Query: "release"})
 				return err
 			},
 		},

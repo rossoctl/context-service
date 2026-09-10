@@ -123,6 +123,12 @@ func (f *fakeManager) GarbageCollectContextSnapshots(_ context.Context, _, _ str
 func (f *fakeManager) ContextLifecycleCapabilities(_ context.Context, _, _ string) (contextresource.LifecycleCapabilities, error) {
 	return contextresource.LifecycleCapabilities{Snapshots: true, Clones: true}, nil
 }
+func (f *fakeManager) PublishContextQueryIndex(_ context.Context, _, _ string, _ contextresource.QueryIndex) error {
+	return nil
+}
+func (f *fakeManager) QueryContexts(_ context.Context, _ string, _ contextresource.Subject, request contextresource.QueryRequest) (contextresource.QueryResponse, error) {
+	return contextresource.QueryResponse{Items: []contextresource.QueryResult{{Score: 2, Record: contextresource.QueryRecord{ID: "fact", Context: "memory", Type: "memory", Text: request.Query}}}}, nil
+}
 func (f *fakeManager) ListStorageClasses(_ context.Context) ([]storageclass.Resource, error) {
 	return []storageclass.Resource{{Name: "fast", Default: true, Provisioner: "example.csi.io", VolumeBindingMode: "WaitForFirstConsumer", ReclaimPolicy: "Delete", AllowVolumeExpansion: true}}, nil
 }
@@ -167,6 +173,22 @@ func TestContextSnapshotLifecycleRoutes(t *testing.T) {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestContextQueryRoutes(t *testing.T) {
+	publish := httptest.NewRequest(http.MethodPut, "/v1/namespaces/team1/contexts/memory/query-index", bytes.NewBufferString(`{"revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","records":[]}`))
+	publishResponse := httptest.NewRecorder()
+	NewHandler(&fakeManager{}).ServeHTTP(publishResponse, publish)
+	if publishResponse.Code != http.StatusNoContent {
+		t.Fatalf("publish status = %d, body = %s", publishResponse.Code, publishResponse.Body.String())
+	}
+
+	query := httptest.NewRequest(http.MethodPost, "/v1/namespaces/team1/query", bytes.NewBufferString(`{"query":"release","contexts":["memory"]}`))
+	queryResponse := httptest.NewRecorder()
+	NewHandler(&fakeManager{}).ServeHTTP(queryResponse, query)
+	if queryResponse.Code != http.StatusOK || !bytes.Contains(queryResponse.Body.Bytes(), []byte(`"id":"fact"`)) {
+		t.Fatalf("query status = %d, body = %s", queryResponse.Code, queryResponse.Body.String())
 	}
 }
 

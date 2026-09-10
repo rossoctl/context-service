@@ -175,6 +175,45 @@ type LifecycleCapabilities struct {
 	Reason    string `json:"reason,omitempty"`
 }
 
+type QueryRecord struct {
+	ID       string          `json:"id"`
+	Context  string          `json:"context"`
+	Type     string          `json:"type"`
+	Revision string          `json:"revision"`
+	Title    string          `json:"title,omitempty"`
+	Text     string          `json:"text"`
+	Keywords []string        `json:"keywords,omitempty"`
+	Source   SourceReference `json:"source"`
+	File     string          `json:"file,omitempty"`
+}
+
+type QueryIndex struct {
+	Revision string        `json:"revision"`
+	Records  []QueryRecord `json:"records"`
+}
+
+type QueryRequest struct {
+	Contexts       []string `json:"contexts,omitempty"`
+	Types          []string `json:"types,omitempty"`
+	SourceContexts []string `json:"sourceContexts,omitempty"`
+	Revisions      []string `json:"revisions,omitempty"`
+	IDs            []string `json:"ids,omitempty"`
+	Query          string   `json:"query,omitempty"`
+	Limit          int      `json:"limit,omitempty"`
+	Cursor         string   `json:"cursor,omitempty"`
+}
+
+type QueryResult struct {
+	Score  float64     `json:"score,omitempty"`
+	Record QueryRecord `json:"record"`
+}
+
+type QueryResponse struct {
+	Items       []QueryResult `json:"items"`
+	NextCursor  string        `json:"nextCursor,omitempty"`
+	Unavailable []string      `json:"unavailable,omitempty"`
+}
+
 type List struct {
 	Items []Resource `json:"items"`
 }
@@ -202,4 +241,6 @@ type Manager interface {
 	SetContextRetention(context.Context, string, string, RetentionRequest) (Resource, error)
 	GarbageCollectContextSnapshots(context.Context, string, string, bool) (GarbageCollection, error)
 	ContextLifecycleCapabilities(context.Context, string, string) (LifecycleCapabilities, error)
+	PublishContextQueryIndex(context.Context, string, string, QueryIndex) error
+	QueryContexts(context.Context, string, Subject, QueryRequest) (QueryResponse, error)
 }

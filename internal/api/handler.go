@@ -54,6 +54,8 @@ func NewHandler(manager interface {
 	mux.HandleFunc("PUT /v1/namespaces/{namespace}/contexts/{name}/retention", h.setContextRetention)
 	mux.HandleFunc("POST /v1/namespaces/{namespace}/contexts/{name}/gc", h.garbageCollectContextSnapshots)
 	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}/capabilities", h.contextLifecycleCapabilities)
+	mux.HandleFunc("PUT /v1/namespaces/{namespace}/contexts/{name}/query-index", h.publishContextQueryIndex)
+	mux.HandleFunc("POST /v1/namespaces/{namespace}/query", h.queryContexts)
 	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}/grants", h.listContextGrants)
 	mux.HandleFunc("PUT /v1/namespaces/{namespace}/contexts/{name}/grants", h.setContextGrant)
 	mux.HandleFunc("DELETE /v1/namespaces/{namespace}/contexts/{name}/grants", h.revokeContextGrant)
@@ -63,6 +65,36 @@ func NewHandler(manager interface {
 	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}/audit", h.listContextAudit)
 	mux.HandleFunc("DELETE /v1/namespaces/{namespace}/contexts/{name}", h.deleteContext)
 	return mux
+}
+
+func (h *handler) publishContextQueryIndex(w http.ResponseWriter, r *http.Request) {
+	if !h.requireContextAccess(w, r, contextresource.PermissionWrite) {
+		return
+	}
+	var index contextresource.QueryIndex
+	if err := decodeBody(w, r, &index); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := h.manager.PublishContextQueryIndex(r.Context(), r.PathValue("namespace"), r.PathValue("name"), index); err != nil {
+		writeContextError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handler) queryContexts(w http.ResponseWriter, r *http.Request) {
+	var request contextresource.QueryRequest
+	if err := decodeBody(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := h.manager.QueryContexts(r.Context(), r.PathValue("namespace"), requestSubject(r), request)
+	if err != nil {
+		writeContextError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *handler) createContextSnapshot(w http.ResponseWriter, r *http.Request) {

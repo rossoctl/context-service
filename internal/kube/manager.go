@@ -219,6 +219,9 @@ func (m *Manager) deleteContext(ctx context.Context, namespace, name string, for
 			return fmt.Errorf("%w: %s is used by %s; detach consumers or use force deletion", contextresource.ErrInUse, name, strings.Join(names, ", "))
 		}
 	}
+	if err := m.core.CoreV1().ConfigMaps(namespace).Delete(ctx, queryIndexName(name), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete context query index: %w", err)
+	}
 	if err := m.core.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, pvc.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete context PVC: %w", err)
 	}

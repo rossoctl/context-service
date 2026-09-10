@@ -66,6 +66,7 @@ configuration, sandbox profiles, and illustrated storage layouts.
 - [Vision](VISION.md)
 - [Design and workflows](docs/design.md)
 - [Snapshots, clones, and retention](docs/context-lifecycle.md)
+- [Memory and knowledge query API](docs/context-query.md)
 - [API reference](docs/api.md) and [API examples](docs/api-examples.md)
 - [Serverless Harness integration](docs/serverless-harness.md)
 - [WarmPool integration](docs/warm-pools.md)
