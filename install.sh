@@ -84,6 +84,9 @@ case "$VERSION" in
 	v[0-9]*) ;;
 	*) die "invalid release version: $VERSION" ;;
 esac
+case "$VERSION" in
+	*[!0-9A-Za-z.+-]*) die "invalid release version: $VERSION" ;;
+esac
 
 archive_version="${VERSION#v}"
 archive="contextctl_${archive_version}_${os}_${arch}.tar.gz"
