@@ -1,0 +1,41 @@
+version: 2
+
+project_name: contextctl
+
+builds:
+  - id: contextctl
+    main: ./cmd/contextctl
+    binary: contextctl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Tag }}
+
+archives:
+  - id: contextctl
+    ids:
+      - contextctl
+    formats:
+      - tar.gz
+    name_template: >-
+      contextctl_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+
+release:
+  prerelease: auto
