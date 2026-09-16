@@ -232,8 +232,19 @@ func (m *Manager) updateAccessMetadata(ctx context.Context, namespace, name stri
 }
 
 func readGrants(pvc *corev1.PersistentVolumeClaim) []contextresource.Grant {
+	encoded, present := pvc.Annotations[grantsAnnotation]
+	if !present {
+		// Contexts created before access grants were introduced were implicitly
+		// owned by the unauthenticated user. Preserve that behavior without
+		// weakening contexts that explicitly declare an empty grant set.
+		createdAt := time.Time{}
+		if !pvc.CreationTimestamp.IsZero() {
+			createdAt = pvc.CreationTimestamp.Time
+		}
+		return []contextresource.Grant{ownerGrant(contextresource.Subject{}, createdAt)}
+	}
 	var grants []contextresource.Grant
-	_ = json.Unmarshal([]byte(pvc.Annotations[grantsAnnotation]), &grants)
+	_ = json.Unmarshal([]byte(encoded), &grants)
 	return grants
 }
 
