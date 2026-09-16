@@ -78,7 +78,7 @@ func run(args []string) error {
 		fmt.Print(help)
 		return nil
 	}
-	if args[0] == "help" {
+	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		showHelp(args[1:])
 		return nil
 	}

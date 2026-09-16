@@ -33,6 +33,19 @@ func TestHelpDefinesCoreConcepts(t *testing.T) {
 	}
 }
 
+func TestGlobalHelpFlags(t *testing.T) {
+	for _, argument := range []string{"--help", "-h"} {
+		output := captureStdout(t, func() {
+			if err := run([]string{argument}); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if output != help {
+			t.Fatalf("%s output did not match global help", argument)
+		}
+	}
+}
+
 func TestVersion(t *testing.T) {
 	previous := version
 	version = "v1.2.3"
