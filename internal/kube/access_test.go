@@ -7,10 +7,61 @@ import (
 
 	"github.com/rossoctl/context-service/internal/contextresource"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 )
+
+func TestLegacyContextDefaultsToAnonymousOwner(t *testing.T) {
+	legacy := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "context-legacy",
+			Namespace: "team1",
+			Labels: map[string]string{
+				managedLabel: managedBy, contextLabel: "legacy", contextTypeLabel: "state",
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{
+				corev1.ResourceStorage: resource.MustParse("1Gi"),
+			}},
+		},
+	}
+	manager := &Manager{core: fake.NewSimpleClientset(legacy)}
+	anonymous := contextresource.Subject{Kind: "user", Name: "anonymous"}
+
+	items, err := manager.ListAccessibleContexts(context.Background(), "team1", anonymous)
+	if err != nil || len(items) != 1 || items[0].Name != "legacy" {
+		t.Fatalf("legacy list = %+v, err = %v", items, err)
+	}
+	for _, permission := range []contextresource.Permission{
+		contextresource.PermissionRead,
+		contextresource.PermissionWrite,
+		contextresource.PermissionAdminister,
+	} {
+		if _, err := manager.AccessContext(context.Background(), "team1", "legacy", anonymous, permission); err != nil {
+			t.Fatalf("legacy %s access denied: %v", permission, err)
+		}
+	}
+	grants, err := manager.ListContextGrants(context.Background(), "team1", "legacy")
+	if err != nil || len(grants) != 1 || !sameSubject(grants[0].Subject, anonymous) {
+		t.Fatalf("legacy grants = %+v, err = %v", grants, err)
+	}
+
+	outsider := contextresource.Subject{Kind: "agent", Name: "outsider"}
+	if _, err := manager.AccessContext(context.Background(), "team1", "legacy", outsider, contextresource.PermissionRead); !errors.Is(err, contextresource.ErrNotFound) {
+		t.Fatalf("legacy outsider access error = %v", err)
+	}
+}
+
+func TestExplicitEmptyContextGrantsDoNotUseLegacyFallback(t *testing.T) {
+	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{grantsAnnotation: "[]"}}}
+	if grants := readGrants(pvc); len(grants) != 0 {
+		t.Fatalf("explicit empty grants = %+v", grants)
+	}
+}
 
 func TestContextGrantsEnforceDiscoveryRevocationAndNamespaceIsolation(t *testing.T) {
 	manager := &Manager{core: fake.NewSimpleClientset()}
