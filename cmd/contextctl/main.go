@@ -41,6 +41,7 @@ Commands:
   storage-class COMMAND Discover Kubernetes storage classes (alias: sc)
   context COMMAND       Create, list, show, or delete named contexts (alias: ctx)
   sandbox-pool COMMAND  Create, list, show, wait for, or delete sandbox pools (alias: sb)
+  version               Show the contextctl version
   help [command]        Show help
 
 Quick start:
@@ -60,6 +61,8 @@ Environment:
 Run "contextctl help <command>" for command options and examples.
 `
 
+var version = "dev"
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -77,6 +80,10 @@ func run(args []string) error {
 	}
 	if args[0] == "help" {
 		showHelp(args[1:])
+		return nil
+	}
+	if args[0] == "version" || args[0] == "--version" {
+		fmt.Printf("contextctl %s\n", version)
 		return nil
 	}
 	baseURL := envOr("CS_URL", "http://localhost:8080")

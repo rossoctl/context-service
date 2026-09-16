@@ -33,6 +33,21 @@ func TestHelpDefinesCoreConcepts(t *testing.T) {
 	}
 }
 
+func TestVersion(t *testing.T) {
+	previous := version
+	version = "v1.2.3"
+	t.Cleanup(func() { version = previous })
+
+	output := captureStdout(t, func() {
+		if err := run([]string{"--version"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if output != "contextctl v1.2.3\n" {
+		t.Fatalf("version output = %q", output)
+	}
+}
+
 func TestTransferProgressNonInteractivePrintsFinalStats(t *testing.T) {
 	var output bytes.Buffer
 	progress := newTransferProgress(&output)
