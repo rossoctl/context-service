@@ -48,8 +48,8 @@ the exact source revision.
 mkdir -p /tmp/context-memory-consumer
 cd /tmp/context-memory-consumer
 claude --print --no-session-persistence \
-  --add-dir "$HOME/.contexts/demo-memory/memory" \
-  "Read MEMORY.md from the added directory. What is the codename, release day, and status preference?"
+  "Read MEMORY.md from the added directory. What is the codename, release day, and status preference?" \
+  --add-dir "$HOME/.contexts/demo-memory/memory"
 ```
 
 This final process has the generated memory but not the producer's original session state.
