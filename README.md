@@ -1,74 +1,118 @@
 # Context Service
 
-Context Service provides **Agent Context Infrastructure**: the storage, execution capacity, and
-lifecycle needed to make durable context available to agents. Here, context means an agent's
-workspaces, memory, knowledge, artifacts, and related runtime state—not an LLM's finite context
-window.
+Context Service provides **Agent Context Infrastructure**: durable storage and lifecycle management
+for the state, memory, knowledge, workspaces, and artifacts that agents create.
 
-A caller describes the number of sandboxes and workspace topology it needs; Context Service
-creates or claims that capacity and returns a Kubernetes selector for routing work.
+It works wherever the agent runs:
+
+- **Local harnesses** — capture native state from Claude Code, Codex, OpenCode, or Pi without
+  requiring Kubernetes or a running service.
+- **Container-native platforms** — manage PVC-backed context, shared workspaces, sandboxes, and
+  warm pools through a service API and any CSI storage provider, including IBM Storage Scale.
+
+Both use the same context model, revisions, provenance, and portable transport.
 
 ```mermaid
 flowchart LR
-    Clients["Serverless Harness / Rossoctl"] -->|workload allocation| CS["Context Service"]
-    CS -->|direct allocation| Sandboxes["Sandbox resources"]
-    CS -->|warm allocation| Claims["SandboxClaims"]
-    CS -->|workspace topology| Storage["PVC / CSI storage"]
-    Sandboxes --> Pods["Ready sandbox Pods"]
-    Claims --> Pods
+    subgraph LocalMode["LOCAL AGENT"]
+        direction TB
+        Harness["Local agent harness<br/>Claude · Codex · OpenCode · Pi"]:::agent
+        LocalCLI["contextctl"]:::control
+        Local["Local context<br/>~/.contexts"]:::local
+        SyncService["Context Service API"]:::service
+        SyncPVC["PVC"]:::storage
+        S3["S3-compatible storage"]:::storage
+
+        Harness -->|capture| LocalCLI
+        LocalCLI --> Local
+        Local -.->|sync or backup| SyncService
+        SyncService --> SyncPVC
+        Local -.->|sync or backup| S3
+    end
+
+    subgraph ClusterMode["KUBERNETES"]
+        direction TB
+        RemoteCLI["contextctl"]:::control
+        Service["Context Service API"]:::service
+        PVC["PVC"]:::storage
+        Sandboxes["Sandboxes"]:::agent
+
+        RemoteCLI --> Service
+        Service --> PVC
+        Service --> Sandboxes
+    end
+
+    LocalMode ~~~ ClusterMode
+
+    classDef agent fill:#dbeafe,stroke:#2563eb,color:#172554
+    classDef control fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+    classDef local fill:#dcfce7,stroke:#16a34a,color:#052e16
+    classDef service fill:#fef3c7,stroke:#d97706,color:#451a03
+    classDef storage fill:#cffafe,stroke:#0891b2,color:#083344
+    style LocalMode fill:#f8fafc,stroke:#cbd5e1
+    style ClusterMode fill:#f8fafc,stroke:#cbd5e1
 ```
 
-Serverless Harness is the first integration: it requests a pool at workload start, routes runs to
-the returned selector, and releases the allocation afterward. Agents do not call Context Service
-or create Kubernetes resources directly.
+## What it provides
 
-Context Service currently supports:
-
-- Named PVC-backed `workspace`, `memory`, `knowledge`, and `artifacts` resources
-- Immutable snapshots, writable clones, safe restore, and retention for local contexts; CSI
-  snapshots and clones for PVC contexts
-- Dedicated RWO workspaces per sandbox
-- One shared RWX workspace across a sandbox pool
-- An existing PVC mounted explicitly read-only or read-write
-- Platform-managed sandbox runtime profiles
-- Claims against an existing agent-sandbox WarmPool
+- Automatic capture and restore of native agent-harness state
+- On-demand sync and continuous backup between local context, PVCs, and S3
+- Content-addressed revisions with checksums and provenance
+- Snapshots, writable clones, safe restore, and retention
+- Derived long-term memory, searchable knowledge, and immutable artifacts
+- Shared or isolated sandbox workspaces, existing PVCs, and warm-pool allocation
+- A concise graph of sources, derivatives, consumers, and storage copies
 
 Status: early prototype. The API is not stable.
 
-## Try it locally
-
-With Docker, Kind, `kubectl`, `curl`, and Go installed:
+## Install
 
 ```sh
-make build
-export PATH="$PWD/bin:$PATH"
-make kind-up
-export CS_STORAGE_CLASS=local-path
-
-contextctl ctx create demo
-contextctl sb create demo-pool
-contextctl sb wait demo-pool
-contextctl status
+curl -fsSL https://raw.githubusercontent.com/rossoctl/context-service/main/install.sh | sh
 ```
 
-For a ready-made showcase with multiple context types, sandbox profiles, Pods, and PVCs:
+## Capture & Sync
+
+Capture a local Claude session—no service or Kubernetes required:
 
 ```sh
-make kind-demo
+mkdir -p /tmp/context-demo && cd /tmp/context-demo
+contextctl ctx create demo --type state --backend filesystem
+contextctl ctx attach demo --harness claude
+claude
 ```
 
-See the [complete getting-started guide](docs/getting-started.md) for cleanup, deployment,
-configuration, sandbox profiles, and illustrated storage layouts.
+Tell Claude `Remember that this project's codename is Juniper`, then exit. The session is captured
+automatically.
+
+With a remote Context Service configured, sync it to a PVC:
+
+```sh
+contextctl ctx create cloud-demo --type state
+contextctl ctx sync push demo --remote-name cloud-demo
+```
+
+## Continuous Backup
+
+Keep later sessions backed up automatically while you work:
+
+```sh
+contextctl ctx backup start demo --to pvc://serverless-harness/cloud-demo
+claude --continue
+contextctl ctx graph
+```
+
+See the [complete local-to-PVC demo](demos/local/local-to-pvc/) for pull, restore, and cleanup.
 
 ## Documentation
 
-- [Getting started](docs/getting-started.md)
-- [Vision](VISION.md)
-- [Design and workflows](docs/design.md)
-- [Snapshots, clones, and retention](docs/context-lifecycle.md)
-- [Memory and knowledge query API](docs/context-query.md)
-- [Immutable artifact publishing](docs/artifacts.md)
+- [Capture local harness state](demos/local/harness-capture/)
+- [Try Context Service on Kind](demos/kind/)
+- [Context portability](docs/context-portability.md) and [automatic backup](docs/context-backup.md)
 - [Context relationship graph](docs/context-graph.md)
-- [API reference](docs/api.md) and [API examples](docs/api-examples.md)
+- [Snapshots, clones, and retention](docs/context-lifecycle.md)
+- [Memory and knowledge](docs/derived-memory.md) and [query API](docs/context-query.md)
+- [Design and workflows](docs/design.md)
+- [API reference](docs/api.md)
 - [Serverless Harness integration](docs/serverless-harness.md)
-- [WarmPool integration](docs/warm-pools.md)
+- [Vision](VISION.md)
