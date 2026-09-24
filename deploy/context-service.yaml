@@ -111,7 +111,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: CS_SANDBOX_IMAGE
-              value: ghcr.io/kagenti/serverless-harness-sandbox:latest
+              value: ghcr.io/rossoctl/serverless-harness-sandbox:latest
           ports:
             - name: http
               containerPort: 8080
