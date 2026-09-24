@@ -14,6 +14,8 @@ Service storage.
 Machine-specific attachments and paths are not used to attach the imported context. Import verifies
 the inventory, rejects unsafe archive entries, and installs into a new context without overwriting an
 existing one. Revision history and derivation provenance remain part of the portable manifest.
+Bundles use consumer-readable permissions (`0755` directories and `0644` files) so non-root agents
+can read them from a read-only mount. Local imports remain private (`0700` directories and `0600` files).
 
 ```text
 ~/.contexts/demo                 demo.context                 another machine

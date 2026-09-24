@@ -23,6 +23,10 @@ const (
 	maxBundleFileSize   = 32 << 30
 	maxBundleTotalSize  = 64 << 30
 	maxBundleEntries    = 100_000
+	portableFileMode    = 0o644
+	portableDirMode     = 0o755
+	localFileMode       = 0o600
+	localDirMode        = 0o700
 )
 
 var portableRoots = []string{"harnesses", "memory", "knowledge", "artifacts"}
@@ -123,7 +127,6 @@ type bundleFile struct {
 	name       string
 	sourcePath string
 	data       []byte
-	mode       fs.FileMode
 	size       int64
 	checksum   string
 }
@@ -170,7 +173,7 @@ func (s *Store) exportUnlocked(manifest Manifest, outputPath string) (Bundle, er
 	}
 	manifestData = append(manifestData, '\n')
 	files := []bundleFile{{
-		name: "manifest.json", data: manifestData, mode: 0o600,
+		name: "manifest.json", data: manifestData,
 		size: int64(len(manifestData)), checksum: checksumBytes(manifestData),
 	}}
 
@@ -203,7 +206,7 @@ func (s *Store) exportUnlocked(manifest Manifest, outputPath string) (Bundle, er
 			}
 			files = append(files, bundleFile{
 				name: filepath.ToSlash(relative), sourcePath: filePath,
-				mode: info.Mode().Perm(), size: info.Size(), checksum: checksum,
+				size: info.Size(), checksum: checksum,
 			})
 			return nil
 		}); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -228,7 +231,7 @@ func (s *Store) exportUnlocked(manifest Manifest, outputPath string) (Bundle, er
 	}
 	checksumData = append(checksumData, '\n')
 	files = append(files, bundleFile{
-		name: "checksums.json", data: checksumData, mode: 0o600, size: int64(len(checksumData)),
+		name: "checksums.json", data: checksumData, size: int64(len(checksumData)),
 	})
 
 	if err := writeBundle(outputPath, files); err != nil {
@@ -300,7 +303,7 @@ func (s *Store) Import(bundlePath, name string) (Manifest, error) {
 		destination := filepath.Join(staging, filepath.FromSlash(archivePath))
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(destination, 0o700); err != nil {
+			if err := os.MkdirAll(destination, localDirMode); err != nil {
 				return Manifest{}, err
 			}
 		case tar.TypeReg, tar.TypeRegA:
@@ -311,10 +314,10 @@ func (s *Store) Import(bundlePath, name string) (Manifest, error) {
 				return Manifest{}, errors.New("context bundle is too large")
 			}
 			totalSize += header.Size
-			if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+			if err := os.MkdirAll(filepath.Dir(destination), localDirMode); err != nil {
 				return Manifest{}, err
 			}
-			output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fs.FileMode(header.Mode)&0o777)
+			output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, localFileMode)
 			if err != nil {
 				return Manifest{}, err
 			}
@@ -402,8 +405,14 @@ func writeBundle(outputPath string, files []bundleFile) (resultErr error) {
 	}
 	gzipWriter := gzip.NewWriter(temporary)
 	tarWriter := tar.NewWriter(gzipWriter)
+	for _, directory := range bundleDirectories(files) {
+		header := &tar.Header{Name: directory, Mode: portableDirMode, Typeflag: tar.TypeDir}
+		if err := tarWriter.WriteHeader(header); err != nil {
+			return err
+		}
+	}
 	for _, file := range files {
-		header := &tar.Header{Name: file.name, Mode: int64(file.mode.Perm()), Size: file.size, Typeflag: tar.TypeReg}
+		header := &tar.Header{Name: file.name, Mode: portableFileMode, Size: file.size, Typeflag: tar.TypeReg}
 		if err := tarWriter.WriteHeader(header); err != nil {
 			return err
 		}
@@ -440,6 +449,28 @@ func writeBundle(outputPath string, files []bundleFile) (resultErr error) {
 	}
 	_ = os.Remove(temporaryPath)
 	return nil
+}
+
+func bundleDirectories(files []bundleFile) []string {
+	directories := map[string]struct{}{}
+	for _, file := range files {
+		for directory := path.Dir(file.name); directory != "."; directory = path.Dir(directory) {
+			directories[directory] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(directories))
+	for directory := range directories {
+		result = append(result, directory)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		leftDepth := strings.Count(result[i], "/")
+		rightDepth := strings.Count(result[j], "/")
+		if leftDepth != rightDepth {
+			return leftDepth < rightDepth
+		}
+		return result[i] < result[j]
+	})
+	return result
 }
 
 func verifyBundle(staging string, computed map[string]string) error {

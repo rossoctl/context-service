@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,6 +120,77 @@ func TestExportIsDeterministic(t *testing.T) {
 	}
 	if !bytes.Equal(firstData, secondData) {
 		t.Fatal("unchanged context produced different bundle content")
+	}
+}
+
+func TestExportUsesPortableConsumerReadableModes(t *testing.T) {
+	root := t.TempDir()
+	store := New(filepath.Join(root, "contexts"))
+	if _, err := store.Create("demo", "artifacts"); err != nil {
+		t.Fatal(err)
+	}
+	payload := filepath.Join(store.contextDir("demo"), "artifacts", "reports", "incident.txt")
+	if err := os.MkdirAll(filepath.Dir(payload), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(payload, []byte("portable evidence\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	bundlePath := filepath.Join(root, "demo.context")
+	if _, err := store.Export("demo", bundlePath); err != nil {
+		t.Fatal(err)
+	}
+
+	modes := bundleModes(t, bundlePath)
+	for _, directory := range []string{"artifacts", "artifacts/reports"} {
+		if modes[directory] != portableDirMode {
+			t.Errorf("%s mode = %#o, want %#o", directory, modes[directory], portableDirMode)
+		}
+	}
+	for _, file := range []string{"manifest.json", "checksums.json", "artifacts/reports/incident.txt"} {
+		if modes[file] != portableFileMode {
+			t.Errorf("%s mode = %#o, want %#o", file, modes[file], portableFileMode)
+		}
+	}
+}
+
+func TestImportKeepsPortableContentPrivateLocally(t *testing.T) {
+	root := t.TempDir()
+	bundlePath := filepath.Join(root, "portable.context")
+	source := New(filepath.Join(root, "source"))
+	if _, err := source.Create("source", "artifacts"); err != nil {
+		t.Fatal(err)
+	}
+	payload := filepath.Join(source.contextDir("source"), "artifacts", "report.txt")
+	if err := os.MkdirAll(filepath.Dir(payload), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(payload, []byte("private local copy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Export("source", bundlePath); err != nil {
+		t.Fatal(err)
+	}
+
+	destination := New(filepath.Join(root, "destination"))
+	manifest, err := destination.Import(bundlePath, "restored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(manifest.Path, "artifacts", "report.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != localFileMode {
+		t.Fatalf("local payload mode = %#o, want %#o", info.Mode().Perm(), localFileMode)
+	}
+	directoryInfo, err := os.Stat(filepath.Join(manifest.Path, "artifacts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if directoryInfo.Mode().Perm() != localDirMode {
+		t.Fatalf("local directory mode = %#o, want %#o", directoryInfo.Mode().Perm(), localDirMode)
 	}
 }
 
@@ -237,4 +309,32 @@ func writeTestBundle(t *testing.T, bundlePath string, files map[string]string) {
 	if err := output.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func bundleModes(t *testing.T, bundlePath string) map[string]os.FileMode {
+	t.Helper()
+	input, err := os.Open(bundlePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	gzipReader, err := gzip.NewReader(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gzipReader.Close()
+
+	modes := map[string]os.FileMode{}
+	tarReader := tar.NewReader(gzipReader)
+	for {
+		header, err := tarReader.Next()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			t.Fatal(err)
+		}
+		modes[header.Name] = os.FileMode(header.Mode).Perm()
+	}
+	return modes
 }
