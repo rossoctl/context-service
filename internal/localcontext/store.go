@@ -178,6 +178,17 @@ func (s *Store) List() ([]Manifest, error) {
 	return items, nil
 }
 
+// Delete removes one validated filesystem context and all of its local content.
+func (s *Store) Delete(name string) error {
+	if _, err := s.Get(name); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(s.contextDir(name)); err != nil {
+		return fmt.Errorf("delete local context: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) CaptureClaude(name, projectPath, claudeHome string) (Capture, error) {
 	_, err := s.Get(name)
 	if err != nil {

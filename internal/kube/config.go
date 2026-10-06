@@ -12,6 +12,8 @@ type Config struct {
 	Namespace             string
 	SandboxImage          string
 	SandboxServiceAccount string
+	UploadImage           string
+	PodName               string
 	RESTConfig            *rest.Config
 }
 
@@ -37,6 +39,8 @@ func LoadConfig() (Config, error) {
 		Namespace:             envOr("CS_NAMESPACE", "serverless-harness"),
 		SandboxImage:          image,
 		SandboxServiceAccount: os.Getenv("CS_SANDBOX_SERVICE_ACCOUNT"),
+		UploadImage:           os.Getenv("CS_UPLOAD_IMAGE"),
+		PodName:               os.Getenv("POD_NAME"),
 		RESTConfig:            restConfig,
 	}, nil
 }

@@ -3,16 +3,20 @@ package contextresource
 import (
 	"context"
 	"errors"
+	"io"
 	"time"
 )
 
 var (
-	ErrAlreadyExists = errors.New("context resource already exists")
-	ErrNotFound      = errors.New("context resource not found")
-	ErrInvalid       = errors.New("invalid context resource")
-	ErrForbidden     = errors.New("context access denied")
-	ErrInUse         = errors.New("context resource is in use")
-	ErrUnsupported   = errors.New("context lifecycle operation is not supported by this storage backend")
+	ErrAlreadyExists    = errors.New("context resource already exists")
+	ErrNotFound         = errors.New("context resource not found")
+	ErrInvalid          = errors.New("invalid context resource")
+	ErrForbidden        = errors.New("context access denied")
+	ErrInUse            = errors.New("context resource is in use")
+	ErrFrozen           = errors.New("context resource is frozen")
+	ErrUploadInProgress = errors.New("context upload is in progress")
+	ErrRevisionConflict = errors.New("context revision does not match")
+	ErrUnsupported      = errors.New("context lifecycle operation is not supported by this storage backend")
 )
 
 type CreateRequest struct {
@@ -46,6 +50,8 @@ type Resource struct {
 	Revisions       []Revision   `json:"revisions,omitempty"`
 	EffectiveAccess []Permission `json:"effectiveAccess,omitempty"`
 	Consumers       []Consumer   `json:"consumers,omitempty"`
+	StorageUID      string       `json:"-"`
+	FrozenRevision  string       `json:"-"`
 }
 
 type Permission string
@@ -117,6 +123,14 @@ type Revision struct {
 
 type RevisionList struct {
 	Items []Revision `json:"items"`
+}
+
+// UploadResult describes content that was verified and materialized in a Context.
+type UploadResult struct {
+	Revision      string `json:"revision"`
+	Files         int    `json:"files"`
+	Bytes         int64  `json:"bytes"`
+	WorkspacePath string `json:"workspacePath"`
 }
 
 type SnapshotRequest struct {
@@ -224,6 +238,8 @@ type Manager interface {
 	GetContext(context.Context, string, string) (Resource, error)
 	DeleteContext(context.Context, string, string) error
 	PublishContextRevision(context.Context, string, string, Revision) (Resource, error)
+	UploadContext(context.Context, string, string, string, io.Reader) (UploadResult, error)
+	FreezeContext(context.Context, string, string, string, string) (Resource, error)
 	ListAccessibleContexts(context.Context, string, Subject) ([]Resource, error)
 	AccessContext(context.Context, string, string, Subject, Permission) (Resource, error)
 	ListContextGrants(context.Context, string, string) ([]Grant, error)

@@ -194,6 +194,86 @@ func TestImportKeepsPortableContentPrivateLocally(t *testing.T) {
 	}
 }
 
+func TestPortableReaderMakesContentConsumerReadable(t *testing.T) {
+	root := t.TempDir()
+	bundlePath := filepath.Join(root, "portable.context")
+	source := New(filepath.Join(root, "source"))
+	if _, err := source.Create("source", "artifacts"); err != nil {
+		t.Fatal(err)
+	}
+	payload := filepath.Join(source.contextDir("source"), "artifacts", "report.txt")
+	if err := os.MkdirAll(filepath.Dir(payload), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(payload, []byte("shared remote copy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Export("source", bundlePath); err != nil {
+		t.Fatal(err)
+	}
+	input, err := os.Open(bundlePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	destination := New(filepath.Join(root, "destination"))
+	manifest, err := destination.ImportPortableReader(input, "context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, filePath := range []string{
+		filepath.Join(manifest.Path, "manifest.json"),
+		filepath.Join(manifest.Path, "artifacts", "report.txt"),
+	} {
+		info, err := os.Stat(filePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != portableFileMode {
+			t.Errorf("%s mode = %#o, want %#o", filePath, info.Mode().Perm(), portableFileMode)
+		}
+	}
+	for _, directory := range []string{manifest.Path, filepath.Join(manifest.Path, "artifacts")} {
+		info, err := os.Stat(directory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != portableDirMode {
+			t.Errorf("%s mode = %#o, want %#o", directory, info.Mode().Perm(), portableDirMode)
+		}
+	}
+}
+
+func TestPortableReaderAppliesUploadSpecificLimits(t *testing.T) {
+	root := t.TempDir()
+	source := New(filepath.Join(root, "source"))
+	manifest, err := source.Create("source", "artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(manifest.Path, "artifacts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(manifest.Path, "artifacts", "report.txt"), []byte("too large"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundlePath := filepath.Join(root, "source.context")
+	if _, err := source.Export("source", bundlePath); err != nil {
+		t.Fatal(err)
+	}
+	input, err := os.Open(bundlePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	_, err = New(filepath.Join(root, "destination")).ImportPortableReaderWithLimits(input, "limited", ImportLimits{
+		MaxFileSize: 1, MaxTotalSize: 8, MaxEntries: 100,
+	})
+	if err == nil {
+		t.Fatal("limited import succeeded")
+	}
+}
+
 func TestRevisionChangesOnlyWithPortableContent(t *testing.T) {
 	root := t.TempDir()
 	store := New(filepath.Join(root, "contexts"))

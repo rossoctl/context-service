@@ -37,6 +37,26 @@ func TestCreateGetAndList(t *testing.T) {
 	}
 }
 
+func TestDeleteLocalContext(t *testing.T) {
+	store := New(t.TempDir())
+	created, err := store.Create("demo", "artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(created.Path, "payload.txt"), []byte("demo"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete("demo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(created.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted context path error = %v, want not exist", err)
+	}
+	if err := store.Delete("demo"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second delete error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCaptureAndRestoreClaudeHistory(t *testing.T) {
 	root := t.TempDir()
 	claudeHome := filepath.Join(root, "claude")

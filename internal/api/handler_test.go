@@ -3,8 +3,10 @@ package api
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,11 +16,52 @@ import (
 )
 
 type fakeManager struct {
-	created          pool.CreateRequest
-	createdContext   contextresource.CreateRequest
-	deniedSubject    string
-	deniedPermission contextresource.Permission
-	deleteErr        error
+	created           pool.CreateRequest
+	createdContext    contextresource.CreateRequest
+	deniedSubject     string
+	deniedPermission  contextresource.Permission
+	deleteErr         error
+	deleteCalled      bool
+	uploadedNamespace string
+	uploadedContext   string
+	uploadedBundle    []byte
+	uploadErr         error
+	frozenRevision    string
+	freezeErr         error
+	frozenNamespace   string
+	frozenContext     string
+	frozenRevisionArg string
+	frozenStorageUID  string
+}
+
+func (f *fakeManager) UploadContext(_ context.Context, namespace, name, storageUID string, input io.Reader) (contextresource.UploadResult, error) {
+	f.uploadedNamespace = namespace
+	f.uploadedContext = name
+	f.uploadedBundle, _ = io.ReadAll(input)
+	if storageUID != "pvc-uid" {
+		return contextresource.UploadResult{}, contextresource.ErrNotFound
+	}
+	revision := strings.Repeat("a", 64)
+	return contextresource.UploadResult{
+		Revision: revision, Files: 2, Bytes: 42,
+		WorkspacePath: ".context-service/materialized/" + revision,
+	}, f.uploadErr
+}
+
+func (f *fakeManager) FreezeContext(_ context.Context, namespace, name, revision, storageUID string) (contextresource.Resource, error) {
+	f.frozenNamespace = namespace
+	f.frozenContext = name
+	f.frozenRevisionArg = revision
+	f.frozenStorageUID = storageUID
+	if f.freezeErr != nil {
+		return contextresource.Resource{}, f.freezeErr
+	}
+	if storageUID != "pvc-uid" || revision != strings.Repeat("a", 64) {
+		return contextresource.Resource{}, contextresource.ErrRevisionConflict
+	}
+	resource, _ := f.GetContext(context.Background(), namespace, name)
+	resource.FrozenRevision = revision
+	return resource, nil
 }
 
 func (f *fakeManager) Create(_ context.Context, request pool.CreateRequest) (pool.Pool, error) {
@@ -43,15 +86,28 @@ func TestListPools(t *testing.T) {
 func (f *fakeManager) Delete(_ context.Context, _ string) error { return nil }
 func (f *fakeManager) CreateContext(_ context.Context, request contextresource.CreateRequest) (contextresource.Resource, error) {
 	f.createdContext = request
-	return contextresource.Resource{Name: request.Name, Namespace: request.Namespace, Type: request.Type, Status: "provisioning"}, nil
+	return contextresource.Resource{
+		Name: request.Name, Namespace: request.Namespace, Type: request.Type, Status: "provisioning",
+		Attachment: contextresource.Attachment{Kind: "pvc", ClaimName: "context-" + request.Name},
+		StorageUID: "pvc-uid",
+	}, nil
 }
 func (f *fakeManager) ListContexts(_ context.Context, namespace string) ([]contextresource.Resource, error) {
 	return []contextresource.Resource{{Name: "research", Namespace: namespace, Type: "workspace", Status: "ready"}}, nil
 }
 func (f *fakeManager) GetContext(_ context.Context, namespace, name string) (contextresource.Resource, error) {
-	return contextresource.Resource{Name: name, Namespace: namespace, Type: "workspace", Status: "ready"}, nil
+	return contextresource.Resource{
+		Name: name, Namespace: namespace, Type: "workspace", Status: "ready",
+		CurrentRevision: strings.Repeat("a", 64),
+		Attachment:      contextresource.Attachment{Kind: "pvc", ClaimName: "context-" + name},
+		StorageUID:      "pvc-uid",
+		FrozenRevision:  f.frozenRevision,
+	}, nil
 }
-func (f *fakeManager) DeleteContext(_ context.Context, _, _ string) error { return f.deleteErr }
+func (f *fakeManager) DeleteContext(_ context.Context, _, _ string) error {
+	f.deleteCalled = true
+	return f.deleteErr
+}
 func (f *fakeManager) PublishContextRevision(_ context.Context, namespace, name string, revision contextresource.Revision) (contextresource.Resource, error) {
 	return contextresource.Resource{Name: name, Namespace: namespace, CurrentRevision: revision.ID, Revisions: []contextresource.Revision{revision}}, nil
 }
