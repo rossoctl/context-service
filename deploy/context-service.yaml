@@ -12,7 +12,10 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
   - apiGroups: ["agents.x-k8s.io"]
     resources: ["sandboxes"]
     verbs: ["create", "get", "list", "delete"]
@@ -53,7 +56,10 @@ rules:
     verbs: ["create", "get", "update", "delete"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
     verbs: ["get", "list"]
@@ -112,6 +118,16 @@ spec:
                   fieldPath: metadata.namespace
             - name: CS_SANDBOX_IMAGE
               value: ghcr.io/rossoctl/serverless-harness-sandbox:latest
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: CS_CONTROL_PLANE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: context-service-control-plane
+                  key: token
+                  optional: true
           ports:
             - name: http
               containerPort: 8080

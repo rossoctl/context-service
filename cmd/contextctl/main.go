@@ -1186,12 +1186,23 @@ func formatTransferElapsed(value time.Duration) string {
 
 func removeContext(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context delete", flag.ContinueOnError)
+	backend := flags.String("backend", "pvc", "storage backend: pvc or filesystem")
 	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
 	force := flags.Bool("force", false, "delete despite active or declared consumers")
 	flags.Usage = func() { showHelp([]string{"context", "delete"}) }
 	name, err := parseContextName(flags, args)
 	if err != nil {
 		return err
+	}
+	if *backend == "filesystem" || *backend == "local" {
+		if err := localContextStore().Delete(name); err != nil {
+			return err
+		}
+		fmt.Println("deleted", name)
+		return nil
+	}
+	if *backend != "pvc" {
+		return fmt.Errorf("unsupported context backend %q; use pvc or filesystem", *backend)
 	}
 	var deleteErr error
 	if *force {
@@ -1986,7 +1997,13 @@ Options:
   --json                Print JSON
 `)
 		case "delete", "rm":
-			fmt.Print("Usage: contextctl context delete NAME [--namespace NAME] [--force]\n")
+			fmt.Print(`Usage: contextctl context delete NAME [options]
+
+Options:
+  --backend BACKEND     pvc (default) or filesystem
+  --namespace NAME      Kubernetes namespace
+  --force               Delete a PVC context despite active consumers
+`)
 		default:
 			fmt.Printf("Unknown context command %q.\n", args[1])
 		}

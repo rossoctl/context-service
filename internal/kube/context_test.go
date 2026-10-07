@@ -2,6 +2,8 @@ package kube
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,5 +70,42 @@ func TestManagerPublishesContextRevision(t *testing.T) {
 	got, err := manager.GetContext(context.Background(), "team1", "research")
 	if err != nil || len(got.Revisions) != 1 {
 		t.Fatalf("duplicate publication = %+v, err = %v", got.Revisions, err)
+	}
+}
+
+func TestFrozenContextRejectsDifferentRevisionPublication(t *testing.T) {
+	current := strings.Repeat("a", 64)
+	pvc := uploadTestPVC("pvc-uid", current, current)
+	manager := &Manager{core: kubernetesfake.NewSimpleClientset(pvc)}
+
+	different := contextresource.Revision{
+		ID: strings.Repeat("b", 64), CreatedAt: time.Now().UTC(), Operation: "sync", Producer: "contextctl",
+	}
+	if _, err := manager.PublishContextRevision(context.Background(), "team1", "research", different); !errors.Is(err, contextresource.ErrFrozen) {
+		t.Fatalf("PublishContextRevision error = %v, want ErrFrozen", err)
+	}
+	got, err := manager.GetContext(context.Background(), "team1", "research")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CurrentRevision != current || got.FrozenRevision != current {
+		t.Fatalf("frozen context changed: %+v", got)
+	}
+}
+
+func TestFrozenContextAllowsExactRevisionPublication(t *testing.T) {
+	current := strings.Repeat("a", 64)
+	pvc := uploadTestPVC("pvc-uid", current, current)
+	manager := &Manager{core: kubernetesfake.NewSimpleClientset(pvc)}
+	revision := contextresource.Revision{
+		ID: current, CreatedAt: time.Now().UTC(), Operation: "upload", Producer: "context-service",
+	}
+
+	got, err := manager.PublishContextRevision(context.Background(), "team1", "research", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CurrentRevision != current || got.FrozenRevision != current {
+		t.Fatalf("idempotent publication = %+v", got)
 	}
 }

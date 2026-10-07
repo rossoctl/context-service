@@ -16,6 +16,12 @@ selector for routing work.
 | `POST` | `/v1/contexts` | Create a named PVC-backed context resource |
 | `GET` | `/v1/namespaces/{namespace}/contexts` | List named context resources |
 | `GET` | `/v1/namespaces/{namespace}/contexts/{name}` | Read a named context resource |
+| `POST` | `/internal/v1/contexts` | Create a Context for a trusted control plane |
+| `GET` | `/internal/v1/namespaces/{namespace}/contexts/{name}/attachment` | Resolve trusted mount metadata and upload status |
+| `POST` | `/internal/v1/namespaces/{namespace}/contexts/{name}/freeze` | Freeze an exact revision and return its attachment |
+| `DELETE` | `/internal/v1/namespaces/{namespace}/contexts/{name}` | Delete a Context for a trusted control plane |
+| `POST` | `/v1/namespaces/{namespace}/contexts/{name}/upload-capabilities` | Issue a scoped upload capability |
+| `PUT` | `/v1/uploads/{id}` | Upload and materialize a portable context bundle |
 | `GET` | `/v1/namespaces/{namespace}/contexts/{name}/revisions` | List published context revisions |
 | `POST` | `/v1/namespaces/{namespace}/contexts/{name}/revisions` | Publish a verified context revision |
 | `PUT` | `/v1/namespaces/{namespace}/contexts/{name}/query-index` | Publish query records for the current revision |
@@ -100,6 +106,96 @@ Creation returns the stable PVC attachment that a runtime can mount:
 
 Deletion removes the managed PVC. Consumers should treat `attachment.kind` as a discriminator so
 future storage backends can use a different attachment contract.
+
+### Upload context content
+
+See [How context uploads work](context-upload.md) for the internal data flow and safety boundaries.
+
+Moca requests an upload capability after it authenticates the user. The request uses a shared
+service credential and the verified user identity:
+
+```text
+POST /v1/namespaces/{namespace}/contexts/{name}/upload-capabilities
+Authorization: Bearer <CS_CONTROL_PLANE_TOKEN>
+X-Context-Subject: user:<verified-user-id>
+```
+
+The user must have `write` access to the Context. Context Service returns `404` when the Context
+does not exist or the user lacks access.
+
+The response contains a root-relative upload URL, a one-time bearer token, its expiry, and upload
+constraints:
+
+```json
+{
+  "uploadUrl": "/v1/uploads/opaque-id",
+  "token": "one-time-token",
+  "expiresAt": "2026-10-02T19:05:00Z",
+  "method": "PUT",
+  "contentType": "application/vnd.rossoctl.context",
+  "maxBytes": 268435456
+}
+```
+
+The client sends the compressed bundle directly to Context Service. The client uses the returned
+method, media type, and bearer token. The token expires after five minutes and succeeds once.
+The capability is bound to the PVC identity recorded when Context Service issues it. Replacing the
+PVC invalidates the capability. Concurrent redemption is rejected. A failed attempt can retry until
+the capability expires; successful publication consumes it. A frozen Context permanently consumes
+an outstanding capability when the client tries to redeem it.
+
+Context Service validates the archive and materializes it in the existing Context PVC. Directories
+use mode `0755`. Files use mode `0644`. The upload response contains `revision`, `files`, and
+`bytes`, and `workspacePath`. The path is relative to the PVC mount point. It does not expose the
+namespace or PVC name.
+
+The compressed request limit is 256 MiB. Materialization permits at most 10,000 archive entries,
+256 MiB per file, and 1 GiB total uncompressed content. For smaller PVCs, the uncompressed limit is
+90 percent of the requested storage size. This reserves space for filesystem and service metadata.
+The bundle type must match the Context type.
+Uploads for one Context run sequentially. Context Service removes the helper Pod before it publishes
+the revision, so Moca can mount an RWO volume after the upload response.
+
+Set `CS_CONTROL_PLANE_TOKEN` from a Kubernetes Secret. Do not expose this credential to clients.
+This implementation stores capabilities in memory and requires one Context Service replica. A
+service restart invalidates outstanding capabilities. The helper uses the running Context Service
+container image digest, which prevents helper and API version skew.
+
+Moca uses the same service credential and verified identity to create Context storage:
+
+```text
+POST /internal/v1/contexts
+Authorization: Bearer <CS_CONTROL_PLANE_TOKEN>
+X-Context-Subject: user:<verified-user-id>
+```
+
+The request body matches `POST /v1/contexts`. The response contains an opaque, immutable
+`contextId`, plus `namespace`, `status`, `currentRevision`, and `attachment`. The ID identifies the
+backing storage instance, not its reusable route name. Moca stores the ID and attachment but does
+not return them to the client.
+
+Before Moca creates a Sandbox, it freezes the uploaded revision:
+
+```text
+POST /internal/v1/namespaces/{namespace}/contexts/{name}/freeze
+Authorization: Bearer <CS_CONTROL_PLANE_TOKEN>
+X-Context-Subject: user:<verified-user-id>
+
+{"revision":"<revision returned by the upload>"}
+```
+
+Context Service requires `attach` and `read` access. It verifies the exact current revision and PVC
+identity under the same lock used by uploads. It then records the frozen revision and returns
+`contextId`, `namespace`, `status`, `currentRevision`, and `attachment` atomically. Repeating the
+request for the same PVC and revision succeeds. A revision mismatch returns `409`.
+
+After a Context is frozen, Context Service rejects new upload capabilities and rejects redemption
+of capabilities issued before the freeze. Moca mounts the returned PVC read-only. Context Service
+does not create or inspect a Sandbox in this flow. The attachment `GET` route remains available for
+trusted status checks, but it does not freeze the Context.
+
+Moca deletes owned Context storage through the internal `DELETE` route. Context Service requires
+the service credential, the verified identity, and `administer` access.
 
 Successful sync publishes a content-addressed revision containing its creation time, producer,
 source revisions, transformation parameters, and file totals. `GET .../revisions` returns the

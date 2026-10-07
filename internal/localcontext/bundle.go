@@ -46,6 +46,16 @@ type Revision struct {
 	Bytes  int64
 }
 
+type ImportLimits struct {
+	MaxFileSize  int64
+	MaxTotalSize int64
+	MaxEntries   int
+}
+
+var defaultImportLimits = ImportLimits{
+	MaxFileSize: maxBundleFileSize, MaxTotalSize: maxBundleTotalSize, MaxEntries: maxBundleEntries,
+}
+
 type revisionEntry struct {
 	path     string
 	checksum string
@@ -255,6 +265,29 @@ func (s *Store) Import(bundlePath, name string) (Manifest, error) {
 		return Manifest{}, err
 	}
 	defer input.Close()
+	return s.ImportReader(input, name)
+}
+
+// ImportReader verifies and atomically installs a portable bundle read from input.
+// It keeps the private modes used by local Context storage.
+func (s *Store) ImportReader(input io.Reader, name string) (Manifest, error) {
+	return s.importReader(input, name, localDirMode, localFileMode, defaultImportLimits)
+}
+
+// ImportPortableReader verifies and atomically installs a portable bundle read
+// from input. It makes the installed content readable by a non-root consumer.
+func (s *Store) ImportPortableReader(input io.Reader, name string) (Manifest, error) {
+	return s.importReader(input, name, portableDirMode, portableFileMode, defaultImportLimits)
+}
+
+func (s *Store) ImportPortableReaderWithLimits(input io.Reader, name string, limits ImportLimits) (Manifest, error) {
+	if limits.MaxFileSize <= 0 || limits.MaxTotalSize <= 0 || limits.MaxEntries <= 0 {
+		return Manifest{}, errors.New("portable import limits must be positive")
+	}
+	return s.importReader(input, name, portableDirMode, portableFileMode, limits)
+}
+
+func (s *Store) importReader(input io.Reader, name string, dirMode, fileMode os.FileMode, limits ImportLimits) (Manifest, error) {
 	gzipReader, err := gzip.NewReader(input)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("read context bundle: %w", err)
@@ -289,7 +322,7 @@ func (s *Store) Import(bundlePath, name string) (Manifest, error) {
 			return Manifest{}, fmt.Errorf("read context bundle: %w", err)
 		}
 		entries++
-		if entries > maxBundleEntries {
+		if entries > limits.MaxEntries {
 			return Manifest{}, errors.New("context bundle contains too many entries")
 		}
 		archivePath, err := safeBundlePath(header.Name)
@@ -303,21 +336,21 @@ func (s *Store) Import(bundlePath, name string) (Manifest, error) {
 		destination := filepath.Join(staging, filepath.FromSlash(archivePath))
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(destination, localDirMode); err != nil {
+			if err := os.MkdirAll(destination, dirMode); err != nil {
 				return Manifest{}, err
 			}
 		case tar.TypeReg, tar.TypeRegA:
-			if header.Size < 0 || header.Size > maxBundleFileSize {
+			if header.Size < 0 || header.Size > limits.MaxFileSize {
 				return Manifest{}, fmt.Errorf("bundle entry %s has invalid size %d", archivePath, header.Size)
 			}
-			if totalSize > maxBundleTotalSize-header.Size {
+			if totalSize > limits.MaxTotalSize-header.Size {
 				return Manifest{}, errors.New("context bundle is too large")
 			}
 			totalSize += header.Size
-			if err := os.MkdirAll(filepath.Dir(destination), localDirMode); err != nil {
+			if err := os.MkdirAll(filepath.Dir(destination), dirMode); err != nil {
 				return Manifest{}, err
 			}
-			output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, localFileMode)
+			output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fileMode)
 			if err != nil {
 				return Manifest{}, err
 			}
@@ -380,12 +413,28 @@ func (s *Store) Import(bundlePath, name string) (Manifest, error) {
 	if err := os.Remove(filepath.Join(staging, "checksums.json")); err != nil {
 		return Manifest{}, err
 	}
+	if err := applyImportModes(staging, dirMode, fileMode); err != nil {
+		return Manifest{}, err
+	}
 	if err := os.Rename(staging, destination); err != nil {
 		return Manifest{}, err
 	}
 	installed = true
 	manifest.Path = destination
 	return manifest, nil
+}
+
+func applyImportModes(root string, dirMode, fileMode os.FileMode) error {
+	return filepath.WalkDir(root, func(filePath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		mode := fileMode
+		if entry.IsDir() {
+			mode = dirMode
+		}
+		return os.Chmod(filePath, mode)
+	})
 }
 
 func writeBundle(outputPath string, files []bundleFile) (resultErr error) {

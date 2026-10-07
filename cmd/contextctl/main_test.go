@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -203,6 +204,20 @@ func TestLocalClaudeStateWorkflow(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(destinationHistory, "memory", "MEMORY.md")); err != nil {
 		t.Fatalf("restored memory: %v", err)
+	}
+}
+
+func TestDeleteFilesystemContext(t *testing.T) {
+	contextHome := filepath.Join(t.TempDir(), "contexts")
+	t.Setenv("CS_CONTEXT_HOME", contextHome)
+	if err := run([]string{"ctx", "create", "demo", "--type", "artifacts", "--backend", "filesystem"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"ctx", "delete", "demo", "--backend", "filesystem"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(contextHome, "demo")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted context path error = %v, want not exist", err)
 	}
 }
 
