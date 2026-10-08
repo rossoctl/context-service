@@ -3,9 +3,9 @@
 Status: early prototype; the API is not yet stable.
 
 Context Service provides the API for Agent Context Infrastructure. It accepts workload-scoped
-infrastructure intent rather than Kubernetes manifests. A client requests sandbox capacity and a
-workspace topology. Context Service creates or claims the resources and returns a Kubernetes
-selector for routing work.
+infrastructure intent rather than Kubernetes manifests. A client requests named context storage;
+Context Service creates the PVC and returns the attachment a runtime mounts. Execution environments
+(sandboxes) are owned by the runtime, such as Moca, not by Context Service.
 
 ## Endpoints
 
@@ -24,13 +24,18 @@ selector for routing work.
 | `GET`, `PUT`, `DELETE` | `/v1/namespaces/{namespace}/contexts/{name}/consumers` | Inspect, attach, or detach consumers |
 | `GET` | `/v1/namespaces/{namespace}/contexts/{name}/audit` | Read grant and attachment events |
 | `DELETE` | `/v1/namespaces/{namespace}/contexts/{name}` | Delete a named context resource |
-| `POST` | `/v1/sandbox-pools` | Create an allocation |
-| `GET` | `/v1/sandbox-pools` | List allocations |
-| `GET` | `/v1/sandbox-pools/{name}` | Read allocation status |
-| `DELETE` | `/v1/sandbox-pools/{name}` | Release an allocation |
 
-The allocation `name` is its stable identity. Creation is rejected with `409` if owned resources
-already exist under that name.
+The context `name` is its stable identity within a namespace. Creation is rejected with `409` if a
+context with that name already exists.
+
+### Removed: sandbox pools
+
+The `/v1/sandbox-pools` endpoints, sandbox profiles (`SandboxTemplate`), and WarmPool claims have
+been removed; those routes now return `404`. Context Service no longer creates, claims, or deletes
+`agents.x-k8s.io` Sandbox resources, and `CS_SANDBOX_IMAGE` is ignored. To migrate, create a context
+with `POST /v1/contexts` and mount the returned `attachment.claimName` PVC in the execution
+environment your runtime creates. Existing context PVCs are unaffected. Sandboxes and workspace PVCs
+created by earlier versions are not deleted; remove them with `kubectl` once no longer needed.
 
 ### Storage-class discovery
 
@@ -57,7 +62,7 @@ does not claim whether a class supports `ReadWriteOnce` or `ReadWriteMany`.
 
 ## Named context resources
 
-Named resources let an integration provision storage independently from sandbox capacity. The
+Named resources let an integration provision storage independently from its execution environment. The
 initial implementation supports five classifications over the same PVC-backed contract:
 `workspace`, `state`, `memory`, `knowledge`, and `artifacts`. Classification is metadata today; it
 does not yet change provisioning or lifecycle semantics. `state` contains native harness data;
@@ -105,138 +110,27 @@ Successful sync publishes a content-addressed revision containing its creation t
 source revisions, transformation parameters, and file totals. `GET .../revisions` returns the
 ordered history without mounting the PVC. See [Context revisions and provenance](context-revisions.md).
 
-## Sandbox-pool create request
-
-```json
-{
-  "name": "shared-review",
-  "replicas": 3,
-  "sandboxProfile": "developer",
-  "workspace": {
-    "size": "5Gi",
-    "accessMode": "ReadWriteMany",
-    "storageClass": "ibm-scale-csi"
-  }
-}
-```
-
-Exactly one allocation strategy is selected by the request:
-
-- Managed `ReadWriteOnce` workspace: one PVC per sandbox
-- Managed `ReadWriteMany` workspace: one shared PVC
-- Existing PVC: `claimName` with an explicit `readOnly` value
-- Existing WarmPool: `warmPoolRef` with no workspace settings
-
-`sandboxProfile` is optional and names a platform-managed `SandboxTemplate` in the Context
-Service namespace. Context Service copies its Sandbox runtime blueprint and injects the selected
-workspace into the first container at `/workspace`. If omitted, Context Service uses its built-in
-runtime configured by `CS_SANDBOX_IMAGE`.
-
-The profile must define at least one container. It must not define `volumeClaimTemplates` or a
-volume or volume mount named `workspace`; persistent workspace storage is requested through the
-Context Service API. `sandboxProfile` cannot be combined with `warmPoolRef`; a WarmPool already
-selects its own `SandboxTemplate`.
-
-## Sandbox-pool list response
-
-`GET /v1/sandbox-pools` returns every pool currently represented by managed Sandboxes,
-SandboxClaims, or workspace PVCs:
-
-```json
-{
-  "items": [
-    {
-      "name": "shared-review",
-      "status": "ready",
-      "replicas": 3,
-      "readyReplicas": 3,
-      "sandboxSelector": "context.rossoctl.io/pool=shared-review",
-      "sandboxProfile": "developer",
-      "workspace": {
-        "size": "5Gi",
-        "accessMode": "ReadWriteMany",
-        "storageClass": "ibm-scale-csi"
-      },
-      "resources": [
-        {"kind": "sandbox", "name": "sandbox-shared-review-0", "status": "Ready"},
-        {"kind": "pod", "name": "sandbox-shared-review-0", "status": "Running"},
-        {"kind": "pvc", "name": "shared-review-workspace", "status": "Bound"}
-      ]
-    }
-  ]
-}
-```
-
-`resources` groups the Kubernetes objects behind each logical pool. Resource status is a snapshot;
-clients should use the pool's `status` and `readyReplicas` fields for allocation readiness.
-
-Workspace topology must be declared before sandbox creation. Kubernetes cannot add a PVC mount to
-an already-running Pod.
-
-See [API examples](api-examples.md) for complete requests and topology diagrams.
-
-## Creation response
-
-```json
-{
-  "name": "shared-review",
-  "status": "provisioning",
-  "replicas": 3,
-  "readyReplicas": 0,
-  "sandboxSelector": "context.rossoctl.io/pool=shared-review",
-  "sandboxProfile": "developer",
-  "workspace": {
-    "size": "5Gi",
-    "accessMode": "ReadWriteMany",
-    "storageClass": "ibm-scale-csi"
-  }
-}
-```
-
-Context Service applies the allocation name to managed Sandboxes, PVCs, and SandboxClaims:
-
-```text
-CS name:          shared-review
-Kubernetes label: context.rossoctl.io/pool=shared-review
-CS selector:      context.rossoctl.io/pool=shared-review
-```
-
-The `sandboxSelector` is the complete label selector a runtime uses to find eligible Sandbox Pods.
-`status` becomes `ready` when `readyReplicas` equals `replicas`.
-
-Serverless Harness exposes this allocation as a `workloadId`. Its identity and Redis behavior are
-described in [Serverless Harness integration](serverless-harness.md).
-
-## Release behavior
-
-Successful deletion returns `204 No Content`.
-
-- Managed Sandboxes and PVCs are deleted.
-- An existing PVC referenced by `workspace.claimName` is never deleted.
-- A WarmPool allocation deletes its SandboxClaims, not the WarmPool or SandboxTemplate.
-
 ## Validation and errors
 
 - `name` must be a lowercase Kubernetes name of at most 50 characters.
-- `replicas` must be between 1 and 100.
-- `sandboxProfile`, when set, must name an existing `SandboxTemplate`.
-- Managed workspaces require a positive Kubernetes storage quantity.
-- Managed `accessMode` must be `ReadWriteOnce` or `ReadWriteMany`.
+- `type` must be `workspace`, `state`, `memory`, `knowledge`, or `artifacts`.
+- `storage.size` must be a positive Kubernetes storage quantity.
+- `storage.accessMode` must be `ReadWriteOnce` or `ReadWriteMany`.
 - Unknown JSON fields are rejected.
 - Request bodies are limited to 1 MiB.
 
 ```json
 {
   "error": "invalid_request",
-  "message": "workspace.size is required"
+  "message": "storage.size must be a positive Kubernetes quantity"
 }
 ```
 
 | Status | Error | Meaning |
 |---|---|---|
 | `400` | `invalid_request` | Malformed or unsupported request |
-| `404` | `not_found` | Allocation not found |
-| `409` | `already_exists` | Allocation resources already exist |
+| `404` | `not_found` | Context or snapshot not found |
+| `409` | `already_exists` | Context resources already exist |
 | `409` | `in_use` | Context has declared or active consumers |
 | `501` | `unsupported` | The storage backend cannot perform the requested lifecycle operation |
 | `500` | `internal_error` | Kubernetes or service failure |

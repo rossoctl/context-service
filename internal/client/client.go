@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/rossoctl/context-service/internal/contextresource"
-	"github.com/rossoctl/context-service/internal/pool"
 	"github.com/rossoctl/context-service/internal/storageclass"
 )
 
@@ -40,28 +39,6 @@ func (c *Client) ListStorageClasses(ctx context.Context) ([]storageclass.Resourc
 	var result storageclass.List
 	err := c.do(ctx, http.MethodGet, "/v1/storage-classes", nil, &result)
 	return result.Items, err
-}
-
-func (c *Client) Create(ctx context.Context, request pool.CreateRequest) (pool.Pool, error) {
-	var result pool.Pool
-	err := c.do(ctx, http.MethodPost, "/v1/sandbox-pools", request, &result)
-	return result, err
-}
-
-func (c *Client) List(ctx context.Context) ([]pool.Pool, error) {
-	var result pool.List
-	err := c.do(ctx, http.MethodGet, "/v1/sandbox-pools", nil, &result)
-	return result.Items, err
-}
-
-func (c *Client) Get(ctx context.Context, name string) (pool.Pool, error) {
-	var result pool.Pool
-	err := c.do(ctx, http.MethodGet, "/v1/sandbox-pools/"+name, nil, &result)
-	return result, err
-}
-
-func (c *Client) Delete(ctx context.Context, name string) error {
-	return c.do(ctx, http.MethodDelete, "/v1/sandbox-pools/"+name, nil, nil)
 }
 
 func (c *Client) CreateContext(ctx context.Context, request contextresource.CreateRequest) (contextresource.Resource, error) {

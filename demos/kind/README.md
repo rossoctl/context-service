@@ -10,8 +10,7 @@ export PATH="$PWD/bin:$PATH"
 contextctl status
 ```
 
-The demo includes multiple context types plus shared, dedicated, and read-only sandbox
-workspaces.
+The demo creates several context types and mounts them in a sample agent Pod.
 
 Clean up when finished:
 
@@ -20,5 +19,5 @@ make kind-demo-clean
 make kind-down
 ```
 
-See [Getting started](../../docs/getting-started.md) for a guided walkthrough, deployment options,
-sandbox profiles, and workspace layouts.
+See [Getting started](../../docs/getting-started.md) for a guided walkthrough and deployment
+options.
