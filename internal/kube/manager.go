@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/storageclass"
@@ -59,6 +60,7 @@ const (
 	contextLabel              = "context.rossoctl.io/name"
 	contextTypeLabel          = "context.rossoctl.io/type"
 	currentRevisionAnnotation = "context.rossoctl.io/current-revision"
+	frozenRevisionAnnotation  = "context.rossoctl.io/frozen-revision"
 	revisionsAnnotation       = "context.rossoctl.io/revisions"
 )
 
@@ -126,6 +128,7 @@ func resourceFromContextPVC(pvc *corev1.PersistentVolumeClaim) contextresource.R
 		},
 		Attachment:      contextresource.Attachment{Kind: "pvc", ClaimName: pvc.Name},
 		CurrentRevision: pvc.Annotations[currentRevisionAnnotation], Revisions: revisions,
+		StorageUID: string(pvc.UID), FrozenRevision: pvc.Annotations[frozenRevisionAnnotation],
 	}
 }
 
@@ -141,6 +144,13 @@ func (m *Manager) PublishContextRevision(ctx context.Context, namespace, name st
 		}
 		if pvc.Labels[managedLabel] != managedBy || pvc.Labels[contextLabel] != name {
 			return contextresource.ErrNotFound
+		}
+		if frozen := pvc.Annotations[frozenRevisionAnnotation]; frozen != "" {
+			if revision.ID == frozen && pvc.Annotations[currentRevisionAnnotation] == frozen {
+				result = resourceFromContextPVC(pvc)
+				return nil
+			}
+			return contextresource.ErrFrozen
 		}
 		var revisions []contextresource.Revision
 		if encoded := pvc.Annotations[revisionsAnnotation]; encoded != "" {
@@ -213,9 +223,11 @@ func (m *Manager) deleteContext(ctx context.Context, namespace, name string, for
 }
 
 type Manager struct {
-	config  Config
-	core    kubernetes.Interface
-	dynamic dynamic.Interface
+	config      Config
+	core        kubernetes.Interface
+	dynamic     dynamic.Interface
+	uploadMu    sync.Mutex
+	uploadLocks map[string]*sync.Mutex
 }
 
 func NewManager(config Config) (*Manager, error) {
@@ -226,6 +238,24 @@ func NewManager(config Config) (*Manager, error) {
 	dynamicClient, err := dynamic.NewForConfig(config.RESTConfig)
 	if err != nil {
 		return nil, err
+	}
+	// Upload and export helpers run the same image digest as this process, so
+	// the helper and API cannot skew. Without either setting, those two
+	// operations return ErrUnsupported and the rest of the API still works.
+	if config.UploadImage == "" && config.PodName != "" {
+		pod, err := coreClient.CoreV1().Pods(config.Namespace).Get(context.Background(), config.PodName, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("resolve context-service upload image: %w", err)
+		}
+		for _, status := range pod.Status.ContainerStatuses {
+			if status.Name == "context-service" && status.ImageID != "" {
+				config.UploadImage = strings.TrimPrefix(strings.TrimPrefix(status.ImageID, "docker-pullable://"), "docker://")
+				break
+			}
+		}
+		if config.UploadImage == "" {
+			return nil, errors.New("context-service container image digest is unavailable")
+		}
 	}
 	return &Manager{config: config, core: coreClient, dynamic: dynamicClient}, nil
 }
