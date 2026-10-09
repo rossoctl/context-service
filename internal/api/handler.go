@@ -24,19 +24,34 @@ type handler struct {
 		contextresource.Manager
 		storageclass.Manager
 	}
+	uploads *uploadCapabilities
+}
+
+type Options struct {
+	ControlPlaneToken string
 }
 
 func NewHandler(manager interface {
 	contextresource.Manager
 	storageclass.Manager
-}) http.Handler {
-	h := &handler{manager: manager}
+}, options ...Options) http.Handler {
+	var configured Options
+	if len(options) > 0 {
+		configured = options[0]
+	}
+	h := &handler{manager: manager, uploads: newUploadCapabilities(strings.TrimSpace(configured.ControlPlaneToken))}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", h.health)
 	mux.HandleFunc("POST /v1/contexts", h.createContext)
+	mux.HandleFunc("POST /internal/v1/contexts", h.createTrustedContext)
+	mux.HandleFunc("DELETE /internal/v1/namespaces/{namespace}/contexts/{name}", h.deleteTrustedContext)
 	mux.HandleFunc("GET /v1/storage-classes", h.listStorageClasses)
 	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts", h.listContexts)
 	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}", h.getContext)
+	mux.HandleFunc("POST /v1/namespaces/{namespace}/contexts/{name}/upload-capabilities", h.issueContextUpload)
+	mux.HandleFunc("PUT /v1/uploads/{id}", h.uploadContext)
+	mux.HandleFunc("POST /internal/v1/namespaces/{namespace}/contexts/{name}/freeze", h.freezeContext)
+	mux.HandleFunc("GET /internal/v1/namespaces/{namespace}/contexts/{name}/revisions/{revision}/bundle", h.exportFrozenContext)
 	mux.HandleFunc("GET /v1/namespaces/{namespace}/contexts/{name}/revisions", h.listContextRevisions)
 	mux.HandleFunc("POST /v1/namespaces/{namespace}/contexts/{name}/revisions", h.publishContextRevision)
 	mux.HandleFunc("POST /v1/namespaces/{namespace}/contexts/{name}/snapshots", h.createContextSnapshot)
@@ -304,6 +319,10 @@ func (h *handler) listContexts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) createContext(w http.ResponseWriter, r *http.Request) {
+	h.createContextAs(w, r, requestSubject(r), false)
+}
+
+func (h *handler) createContextAs(w http.ResponseWriter, r *http.Request, subject contextresource.Subject, trusted bool) {
 	defer r.Body.Close()
 	var request contextresource.CreateRequest
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
@@ -316,10 +335,19 @@ func (h *handler) createContext(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	request.Owner = requestSubject(r)
+	request.Owner = subject
 	created, err := h.manager.CreateContext(r.Context(), request)
 	if err != nil {
 		writeContextError(w, err)
+		return
+	}
+	if trusted {
+		if created.StorageUID == "" {
+			writeError(w, http.StatusInternalServerError, "storage_identity_unavailable", "context storage identity is unavailable")
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusCreated, trustedContextResponse(created))
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
@@ -335,7 +363,11 @@ func (h *handler) getContext(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) deleteContext(w http.ResponseWriter, r *http.Request) {
-	if _, err := h.manager.AccessContext(r.Context(), r.PathValue("namespace"), r.PathValue("name"), requestSubject(r), contextresource.PermissionAdminister); err != nil {
+	h.deleteContextAs(w, r, requestSubject(r))
+}
+
+func (h *handler) deleteContextAs(w http.ResponseWriter, r *http.Request, subject contextresource.Subject) {
+	if _, err := h.manager.AccessContext(r.Context(), r.PathValue("namespace"), r.PathValue("name"), subject, contextresource.PermissionAdminister); err != nil {
 		writeContextError(w, err)
 		return
 	}
@@ -353,12 +385,19 @@ func (h *handler) deleteContext(w http.ResponseWriter, r *http.Request) {
 }
 
 func requestSubject(r *http.Request) contextresource.Subject {
+	if subject, ok := explicitRequestSubject(r); ok {
+		return subject
+	}
+	return contextresource.Subject{Kind: "user", Name: "anonymous"}
+}
+
+func explicitRequestSubject(r *http.Request) (contextresource.Subject, bool) {
 	value := strings.TrimSpace(r.Header.Get("X-Context-Subject"))
 	kind, name, found := strings.Cut(value, ":")
 	if !found || kind == "" || name == "" {
-		return contextresource.Subject{Kind: "user", Name: "anonymous"}
+		return contextresource.Subject{}, false
 	}
-	return contextresource.Subject{Kind: kind, Name: name}
+	return contextresource.Subject{Kind: kind, Name: name}, true
 }
 
 func (h *handler) listContextGrants(w http.ResponseWriter, r *http.Request) {
@@ -572,6 +611,12 @@ func writeContextError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 	case errors.Is(err, contextresource.ErrInUse):
 		writeError(w, http.StatusConflict, "in_use", err.Error())
+	case errors.Is(err, contextresource.ErrFrozen):
+		writeError(w, http.StatusConflict, "context_frozen", err.Error())
+	case errors.Is(err, contextresource.ErrUploadInProgress):
+		writeError(w, http.StatusConflict, "upload_in_progress", err.Error())
+	case errors.Is(err, contextresource.ErrRevisionConflict):
+		writeError(w, http.StatusConflict, "revision_mismatch", err.Error())
 	case errors.Is(err, contextresource.ErrForbidden):
 		writeError(w, http.StatusForbidden, "forbidden", err.Error())
 	case errors.Is(err, contextresource.ErrUnsupported):

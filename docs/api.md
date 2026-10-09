@@ -24,6 +24,12 @@ Context Service creates the PVC and returns the attachment a runtime mounts. Exe
 | `GET`, `PUT`, `DELETE` | `/v1/namespaces/{namespace}/contexts/{name}/consumers` | Inspect, attach, or detach consumers |
 | `GET` | `/v1/namespaces/{namespace}/contexts/{name}/audit` | Read grant and attachment events |
 | `DELETE` | `/v1/namespaces/{namespace}/contexts/{name}` | Delete a named context resource |
+| `POST` | `/internal/v1/contexts` | Moca: create a Context owned by the delegated subject |
+| `POST` | `/v1/namespaces/{namespace}/contexts/{name}/upload-capabilities` | Moca: issue a one-time upload capability |
+| `PUT` | `/v1/uploads/{id}` | Client: upload a portable bundle with a one-time token |
+| `POST` | `/internal/v1/namespaces/{namespace}/contexts/{name}/freeze` | Moca: pin the current revision |
+| `GET` | `/internal/v1/namespaces/{namespace}/contexts/{name}/revisions/{revision}/bundle` | Moca: stream the frozen revision |
+| `DELETE` | `/internal/v1/namespaces/{namespace}/contexts/{name}` | Moca: delete a Context |
 
 The context `name` is its stable identity within a namespace. Creation is rejected with `409` if a
 context with that name already exists.
@@ -105,6 +111,34 @@ Creation returns the stable PVC attachment that a runtime can mount:
 
 Deletion removes the managed PVC. Consumers should treat `attachment.kind` as a discriminator so
 future storage backends can use a different attachment contract.
+
+### Moca: upload, freeze, and export
+
+Moca calls the trusted routes with the service bearer `CS_CONTROL_PLANE_TOKEN` and the verified
+user in `X-Context-Subject: kind:name`. A missing or wrong bearer returns `401`. A missing subject,
+`user:anonymous`, or `service:context-service-admin` returns `400`. Access is checked for the
+delegated subject; a missing Context or denied access returns `404`. See
+[How context uploads work](context-upload.md) for the flow.
+
+| Route | Access | Result |
+|---|---|---|
+| `POST /internal/v1/contexts` | creates; subject is owner | `201` with `contextId`, `name`, `namespace`, `type`, `status` |
+| `POST .../upload-capabilities` | `write` | `201` with `uploadUrl`, `token`, `expiresAt`, `method`, `contentType`, `maxBytes`; `409 context_frozen` if frozen |
+| `PUT /v1/uploads/{id}` | one-time token | `201` with `revision`, `files`, `bytes`, `workspacePath` |
+| `POST .../freeze` `{"revision": "<sha256>"}` | `attach` and `read` | `200` with `frozenRevision`; `409` on a revision mismatch, a different frozen revision, or an upload in progress |
+| `GET .../revisions/{sha256}/bundle` | `read` | `200` `application/vnd.rossoctl.context` stream; `404` unless the revision is current and frozen |
+| `DELETE /internal/v1/namespaces/{namespace}/contexts/{name}` | `administer` | `204` |
+
+`contextId` is the PVC UID. It identifies the storage instance, not its reusable name. The trusted
+responses do not include the PVC attachment; Moca receives content as bundles, not mounts.
+
+The upload token expires after five minutes and succeeds once. The client sends
+`application/vnd.rossoctl.context` with `Authorization: Bearer <token>`. The compressed limit is
+256 MiB. The expanded limit is 1 GiB or 90 percent of the PVC request, whichever is smaller, with at
+most 10,000 entries. The bundle type must match the Context type.
+
+If the export fails before the first byte, Context Service returns an error status. If it fails
+later, Context Service aborts the connection, so a partial bundle never looks like a complete `200`.
 
 Successful sync publishes a content-addressed revision containing its creation time, producer,
 source revisions, transformation parameters, and file totals. `GET .../revisions` returns the

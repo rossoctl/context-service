@@ -39,9 +39,13 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["create", "get", "update", "delete"]
+  # Short-lived upload and export helper Pods mount one Context PVC each.
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
     verbs: ["get", "list"]
@@ -73,6 +77,7 @@ metadata:
   labels:
     app.kubernetes.io/name: context-service
 spec:
+  # Upload capabilities and per-Context upload locks live in memory; keep one replica.
   replicas: 1
   selector:
     matchLabels:
@@ -98,6 +103,16 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: CS_CONTROL_PLANE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: context-service-control-plane
+                  key: token
+                  optional: true
           ports:
             - name: http
               containerPort: 8080

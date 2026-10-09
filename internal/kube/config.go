@@ -8,8 +8,10 @@ import (
 )
 
 type Config struct {
-	Namespace  string
-	RESTConfig *rest.Config
+	Namespace   string
+	UploadImage string
+	PodName     string
+	RESTConfig  *rest.Config
 }
 
 func LoadConfig() (Config, error) {
@@ -27,8 +29,10 @@ func LoadConfig() (Config, error) {
 	}
 
 	return Config{
-		Namespace:  envOr("CS_NAMESPACE", "serverless-harness"),
-		RESTConfig: restConfig,
+		Namespace:   envOr("CS_NAMESPACE", "serverless-harness"),
+		UploadImage: os.Getenv("CS_UPLOAD_IMAGE"),
+		PodName:     os.Getenv("POD_NAME"),
+		RESTConfig:  restConfig,
 	}, nil
 }
 
