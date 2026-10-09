@@ -42,7 +42,7 @@ func snapshotCommand(c *client.Client, args []string) error {
 func createSnapshot(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context snapshot create", flag.ContinueOnError)
 	backend := flags.String("backend", "auto", "storage backend: auto, pvc, or filesystem")
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	snapshotClass := flags.String("snapshot-class", "", "CSI VolumeSnapshotClass")
 	protected := flags.Bool("protect", false, "protect this snapshot from garbage collection")
 	jsonOutput := flags.Bool("json", false, "print JSON")
@@ -86,7 +86,7 @@ func createSnapshot(c *client.Client, args []string) error {
 func listSnapshots(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context snapshot list", flag.ContinueOnError)
 	backend := flags.String("backend", "auto", "storage backend: auto, pvc, or filesystem")
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"context", "snapshot", "list"}) }
 	name, err := parseContextName(flags, args)
@@ -148,7 +148,7 @@ func listSnapshots(c *client.Client, args []string) error {
 func cloneSnapshot(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context snapshot clone", flag.ContinueOnError)
 	backend := flags.String("backend", "auto", "storage backend: auto, pvc, or filesystem")
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"context", "snapshot", "clone"}) }
 	positional, err := parseLifecycleArgs(flags, args, 2)
@@ -186,7 +186,7 @@ func cloneSnapshot(c *client.Client, args []string) error {
 func restoreSnapshot(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context snapshot restore", flag.ContinueOnError)
 	backend := flags.String("backend", "auto", "storage backend: auto, pvc, or filesystem")
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"context", "snapshot", "restore"}) }
 	positional, err := parseLifecycleArgs(flags, args, 2)
@@ -223,7 +223,7 @@ func restoreSnapshot(c *client.Client, args []string) error {
 func setSnapshotRetention(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context snapshot retention", flag.ContinueOnError)
 	backend := flags.String("backend", "auto", "storage backend: auto, pvc, or filesystem")
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	keepLast := flags.Int("keep-last", 0, "number of newest snapshots to retain")
 	maxAge := flags.Duration("max-age", 0, "retain snapshots newer than this duration")
 	flags.Usage = func() { showHelp([]string{"context", "snapshot", "retention"}) }
@@ -258,7 +258,7 @@ func setSnapshotRetention(c *client.Client, args []string) error {
 func garbageCollectSnapshots(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context snapshot gc", flag.ContinueOnError)
 	backend := flags.String("backend", "auto", "storage backend: auto, pvc, or filesystem")
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	dryRun := flags.Bool("dry-run", false, "show what would be deleted")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"context", "snapshot", "gc"}) }
@@ -300,7 +300,7 @@ func garbageCollectSnapshots(c *client.Client, args []string) error {
 func snapshotCapabilities(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context snapshot capabilities", flag.ContinueOnError)
 	backend := flags.String("backend", "pvc", "storage backend: pvc or filesystem")
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	name, err := parseContextName(flags, args)
 	if err != nil {

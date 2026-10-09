@@ -9,7 +9,7 @@ readonly KUBE_CONTEXT="kind-${CLUSTER_NAME}"
 readonly HOST_PORT="${CONTEXT_SERVICE_PORT:-8080}"
 IMAGE="context-service:kind-$(date -u +%Y%m%d%H%M%S)-$$"
 readonly IMAGE
-readonly NAMESPACE="serverless-harness"
+readonly NAMESPACE="context-service"
 readonly LOCAL_PATH_VERSION="v0.0.37"
 readonly LOCAL_PATH_MANIFEST="https://raw.githubusercontent.com/rancher/local-path-provisioner/${LOCAL_PATH_VERSION}/deploy/local-path-storage.yaml"
 

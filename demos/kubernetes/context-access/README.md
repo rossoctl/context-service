@@ -24,7 +24,7 @@ Create a real Pod that mounts the context read-only:
 
 ```sh
 kubectl apply -f demos/kubernetes/context-access/reader-pod.yaml
-kubectl -n serverless-harness wait --for=condition=Ready pod/context-reader --timeout=90s
+kubectl -n context-service wait --for=condition=Ready pod/context-reader --timeout=90s
 contextctl ctx consumers private
 ```
 
@@ -32,7 +32,7 @@ Deletion is blocked while the Pod is using the context:
 
 ```sh
 contextctl ctx delete private
-kubectl -n serverless-harness delete pod/context-reader
+kubectl -n context-service delete pod/context-reader
 contextctl ctx delete private
 ```
 

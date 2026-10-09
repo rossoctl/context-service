@@ -15,7 +15,7 @@ import (
 func queryContext(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context query", flag.ContinueOnError)
 	backend := flags.String("backend", "filesystem", "query backend: filesystem or pvc")
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	limit := flags.Int("limit", 20, "maximum results (1-100)")
 	cursor := flags.String("cursor", "", "pagination cursor")
 	jsonOutput := flags.Bool("json", false, "print JSON")

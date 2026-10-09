@@ -16,7 +16,7 @@ import (
 func revisionsContext(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context revisions", flag.ContinueOnError)
 	backend := flags.String("backend", "filesystem", "storage backend: pvc or filesystem")
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"context", "revisions"}) }
 	name, err := parseContextName(flags, args)

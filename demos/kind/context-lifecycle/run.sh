@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 CLUSTER_NAME="${KIND_CLUSTER_NAME:-context-service}"
 KUBE_CONTEXT="kind-${CLUSTER_NAME}"
-NAMESPACE="${CS_NAMESPACE:-serverless-harness}"
+NAMESPACE="${CS_NAMESPACE:-context-service}"
 HOST_PORT="${CONTEXT_SERVICE_PORT:-8080}"
 CSI_HOSTPATH_VERSION="v1.18.0"
 SNAPSHOTTER_VERSION="v8.6.0"
