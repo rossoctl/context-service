@@ -1,7 +1,6 @@
 package kube
 
 import (
-	"errors"
 	"os"
 
 	"k8s.io/client-go/rest"
@@ -9,10 +8,8 @@ import (
 )
 
 type Config struct {
-	Namespace             string
-	SandboxImage          string
-	SandboxServiceAccount string
-	RESTConfig            *rest.Config
+	Namespace  string
+	RESTConfig *rest.Config
 }
 
 func LoadConfig() (Config, error) {
@@ -29,15 +26,9 @@ func LoadConfig() (Config, error) {
 		}
 	}
 
-	image := os.Getenv("CS_SANDBOX_IMAGE")
-	if image == "" {
-		return Config{}, errors.New("CS_SANDBOX_IMAGE is required")
-	}
 	return Config{
-		Namespace:             envOr("CS_NAMESPACE", "serverless-harness"),
-		SandboxImage:          image,
-		SandboxServiceAccount: os.Getenv("CS_SANDBOX_SERVICE_ACCOUNT"),
-		RESTConfig:            restConfig,
+		Namespace:  envOr("CS_NAMESPACE", "serverless-harness"),
+		RESTConfig: restConfig,
 	}, nil
 }
 

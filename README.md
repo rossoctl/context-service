@@ -7,8 +7,9 @@ It works wherever the agent runs:
 
 - **Local harnesses** — capture native state from Claude Code, Codex, OpenCode, or Pi without
   requiring Kubernetes or a running service.
-- **Container-native platforms** — manage PVC-backed context, shared workspaces, sandboxes, and
-  warm pools through a service API and any CSI storage provider, including IBM Storage Scale.
+- **Container-native platforms** — manage PVC-backed context and shared workspaces through a
+  service API and any CSI storage provider, including IBM Storage Scale. The runtime, such as
+  Moca, creates the sandboxes that mount them.
 
 Both use the same context model, revisions, provenance, and portable transport.
 
@@ -35,11 +36,11 @@ flowchart LR
         RemoteCLI["contextctl"]:::control
         Service["Context Service API"]:::service
         PVC["PVC"]:::storage
-        Sandboxes["Sandboxes"]:::agent
+        Sandboxes["Runtime sandboxes"]:::agent
 
         RemoteCLI --> Service
         Service --> PVC
-        Service --> Sandboxes
+        Sandboxes -->|mount| PVC
     end
 
     LocalMode ~~~ ClusterMode
@@ -60,7 +61,7 @@ flowchart LR
 - Content-addressed revisions with checksums and provenance
 - Snapshots, writable clones, safe restore, and retention
 - Derived long-term memory, searchable knowledge, and immutable artifacts
-- Shared or isolated sandbox workspaces, existing PVCs, and warm-pool allocation
+- Shared or isolated PVC-backed workspaces that any runtime can mount
 - A concise graph of sources, derivatives, consumers, and storage copies
 
 Status: early prototype. The API is not stable.
@@ -114,5 +115,5 @@ See the [complete local-to-PVC demo](demos/local/local-to-pvc/) for pull, restor
 - [Memory and knowledge](docs/derived-memory.md) and [query API](docs/context-query.md)
 - [Design and workflows](docs/design.md)
 - [API reference](docs/api.md)
-- [Serverless Harness integration](docs/serverless-harness.md)
+- [Moca integration](docs/serverless-harness.md)
 - [Vision](VISION.md)

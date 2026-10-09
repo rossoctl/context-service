@@ -9,38 +9,16 @@ import (
 	"time"
 
 	"github.com/rossoctl/context-service/internal/contextresource"
-	"github.com/rossoctl/context-service/internal/pool"
 	"github.com/rossoctl/context-service/internal/storageclass"
 )
 
 type fakeManager struct {
-	created          pool.CreateRequest
 	createdContext   contextresource.CreateRequest
 	deniedSubject    string
 	deniedPermission contextresource.Permission
 	deleteErr        error
 }
 
-func (f *fakeManager) Create(_ context.Context, request pool.CreateRequest) (pool.Pool, error) {
-	f.created = request
-	return pool.Pool{Name: request.Name, Status: "provisioning", Replicas: request.Replicas}, nil
-}
-func (f *fakeManager) List(_ context.Context) ([]pool.Pool, error) {
-	return []pool.Pool{{Name: "review", Status: "ready", Replicas: 2, ReadyReplicas: 2}}, nil
-}
-func (f *fakeManager) Get(_ context.Context, name string) (pool.Pool, error) {
-	return pool.Pool{Name: name, Status: "ready"}, nil
-}
-
-func TestListPools(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "/v1/sandbox-pools", nil)
-	response := httptest.NewRecorder()
-	NewHandler(&fakeManager{}).ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"name":"review"`)) {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-}
-func (f *fakeManager) Delete(_ context.Context, _ string) error { return nil }
 func (f *fakeManager) CreateContext(_ context.Context, request contextresource.CreateRequest) (contextresource.Resource, error) {
 	f.createdContext = request
 	return contextresource.Resource{Name: request.Name, Namespace: request.Namespace, Type: request.Type, Status: "provisioning"}, nil
@@ -296,136 +274,15 @@ func TestPublishContextRevision(t *testing.T) {
 	}
 }
 
-func TestCreatePool(t *testing.T) {
-	manager := &fakeManager{}
-	body := []byte(`{"name":"bugstone-1","replicas":3,"workspace":{"size":"5Gi","accessMode":"ReadWriteMany","storageClass":"ibm-scale-csi"}}`)
-	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
-	response := httptest.NewRecorder()
-
-	NewHandler(manager).ServeHTTP(response, request)
-	if response.Code != http.StatusCreated {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-	if manager.created.Name != "bugstone-1" || manager.created.Replicas != 3 {
-		t.Fatalf("unexpected create request: %#v", manager.created)
-	}
-}
-
-func TestCreateAcceptsDedicatedRWO(t *testing.T) {
-	manager := &fakeManager{}
-	body := []byte(`{"name":"dedicated","replicas":3,"workspace":{"size":"1Gi","accessMode":"ReadWriteOnce"}}`)
-	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
-	response := httptest.NewRecorder()
-
-	NewHandler(manager).ServeHTTP(response, request)
-	if response.Code != http.StatusCreated {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-	if manager.created.Replicas != 3 || manager.created.Workspace.AccessMode != "ReadWriteOnce" {
-		t.Fatalf("unexpected create request: %#v", manager.created)
-	}
-}
-
-func TestCreateAcceptsSandboxProfile(t *testing.T) {
-	manager := &fakeManager{}
-	body := []byte(`{"name":"developer","replicas":1,"sandboxProfile":"python-tools","workspace":{"size":"1Gi","accessMode":"ReadWriteOnce"}}`)
-	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
-	response := httptest.NewRecorder()
-
-	NewHandler(manager).ServeHTTP(response, request)
-	if response.Code != http.StatusCreated {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-	if manager.created.SandboxProfile != "python-tools" {
-		t.Fatalf("sandbox profile = %q", manager.created.SandboxProfile)
-	}
-}
-
-func TestCreateRejectsSandboxProfileWithWarmPool(t *testing.T) {
-	body := []byte(`{"name":"bad","replicas":1,"sandboxProfile":"python-tools","warmPoolRef":"python-warm","workspace":{}}`)
-	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
-	response := httptest.NewRecorder()
-
-	NewHandler(&fakeManager{}).ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-}
-
-func TestCreateAcceptsExistingReadOnlyClaim(t *testing.T) {
-	manager := &fakeManager{}
-	body := []byte(`{"name":"readers","replicas":3,"workspace":{"claimName":"prepared-workspace","readOnly":true}}`)
-	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
-	response := httptest.NewRecorder()
-
-	NewHandler(manager).ServeHTTP(response, request)
-	if response.Code != http.StatusCreated {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-	if manager.created.Workspace.ClaimName != "prepared-workspace" || manager.created.Workspace.ReadOnly == nil || !*manager.created.Workspace.ReadOnly {
-		t.Fatalf("unexpected create request: %#v", manager.created)
-	}
-}
-
-func TestCreateAcceptsExistingReadWriteClaim(t *testing.T) {
-	manager := &fakeManager{}
-	body := []byte(`{"name":"writer","replicas":1,"workspace":{"claimName":"prepared-workspace","readOnly":false}}`)
-	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
-	response := httptest.NewRecorder()
-
-	NewHandler(manager).ServeHTTP(response, request)
-	if response.Code != http.StatusCreated {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-	if manager.created.Workspace.ReadOnly == nil || *manager.created.Workspace.ReadOnly {
-		t.Fatalf("unexpected create request: %#v", manager.created)
-	}
-}
-
-func TestCreateRejectsClaimWithoutAccessIntent(t *testing.T) {
-	body := []byte(`{"name":"ambiguous","replicas":1,"workspace":{"claimName":"prepared-workspace"}}`)
-	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
-	response := httptest.NewRecorder()
-
-	NewHandler(&fakeManager{}).ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-}
-
-func TestCreateRejectsNewReadOnlyWorkspace(t *testing.T) {
-	body := []byte(`{"name":"bad","replicas":1,"workspace":{"size":"1Gi","accessMode":"ReadWriteMany","readOnly":true}}`)
-	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
-	response := httptest.NewRecorder()
-
-	NewHandler(&fakeManager{}).ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-}
-
-func TestCreateAcceptsWarmPoolClaims(t *testing.T) {
-	manager := &fakeManager{}
-	body := []byte(`{"name":"fast-run","replicas":3,"warmPoolRef":"research-agents","workspace":{}}`)
-	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
-	response := httptest.NewRecorder()
-
-	NewHandler(manager).ServeHTTP(response, request)
-	if response.Code != http.StatusCreated {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-	if manager.created.WarmPoolRef != "research-agents" || manager.created.Replicas != 3 {
-		t.Fatalf("unexpected create request: %#v", manager.created)
-	}
-}
-
-func TestCreateRejectsWarmPoolWithWorkspace(t *testing.T) {
-	body := []byte(`{"name":"bad","replicas":1,"warmPoolRef":"research-agents","workspace":{"size":"1Gi","accessMode":"ReadWriteOnce"}}`)
-	request := httptest.NewRequest(http.MethodPost, "/v1/sandbox-pools", bytes.NewReader(body))
-	response := httptest.NewRecorder()
-
-	NewHandler(&fakeManager{}).ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+func TestSandboxPoolRoutesAreRemoved(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+		for _, path := range []string{"/v1/sandbox-pools", "/v1/sandbox-pools/review"} {
+			request := httptest.NewRequest(method, path, nil)
+			response := httptest.NewRecorder()
+			NewHandler(&fakeManager{}).ServeHTTP(response, request)
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("%s %s status = %d, want 404", method, path, response.Code)
+			}
+		}
 	}
 }

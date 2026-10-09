@@ -1,7 +1,7 @@
 # API examples
 
 These examples call Context Service directly. Agent workloads normally use a runtime integration
-such as [Serverless Harness](serverless-harness.md).
+such as [Moca](serverless-harness.md).
 
 ```sh
 export CS_URL=https://example.test/context-service
@@ -20,76 +20,19 @@ curl --fail --silent --show-error \
   "$CS_URL/healthz"
 ```
 
-## Dedicated RWO workspaces
-
-`ReadWriteOnce` creates one managed PVC per sandbox:
-
-```mermaid
-flowchart LR
-    CS["Context Service"] --> S1["Sandbox 1"] --> P1["RWO PVC 1"]
-    CS --> S2["Sandbox 2"] --> P2["RWO PVC 2"]
-    CS --> S3["Sandbox 3"] --> P3["RWO PVC 3"]
-```
+## Create a context
 
 ```sh
 curl --fail --silent --show-error \
   -H "X-SH-Auth: $CS_TOKEN" \
   -H "Content-Type: application/json" \
-  -X POST "$CS_URL/v1/sandbox-pools" \
-  -d '{
-    "name": "code-review",
-    "replicas": 3,
-    "workspace": {
-      "size": "5Gi",
-      "accessMode": "ReadWriteOnce",
-      "storageClass": "ibm-scale-csi"
-    }
-  }'
-```
-
-## Sandbox runtime profile
-
-Administrators define allowed runtime settings as `SandboxTemplate` resources. Workload callers
-select one by name without sending arbitrary Pod specifications:
-
-```sh
-kubectl apply -f deploy/examples/sandbox-profile.yaml
-contextctl sb create code-review --sandbox-profile shell --replicas 3
-```
-
-Equivalent API field:
-
-```json
-"sandboxProfile": "shell"
-```
-
-The profile controls the image, command, environment, resources, and security settings. Context
-Service injects the requested workspace at `/workspace`. Omit the field to use the built-in
-runtime configured by `CS_SANDBOX_IMAGE`.
-
-## Shared RWX workspace
-
-`ReadWriteMany` creates one managed PVC mounted by every sandbox:
-
-```mermaid
-flowchart LR
-    CS["Context Service"] --> S1["Sandbox 1"]
-    CS --> S2["Sandbox 2"]
-    CS --> S3["Sandbox 3"]
-    S1 --> P["Shared RWX PVC"]
-    S2 --> P
-    S3 --> P
-```
-
-```sh
-curl --fail --silent --show-error \
-  -H "X-SH-Auth: $CS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -X POST "$CS_URL/v1/sandbox-pools" \
+  -X POST "$CS_URL/v1/contexts" \
   -d '{
     "name": "shared-review",
-    "replicas": 3,
-    "workspace": {
+    "namespace": "team1",
+    "type": "workspace",
+    "storage": {
+      "backend": "pvc",
       "size": "5Gi",
       "accessMode": "ReadWriteMany",
       "storageClass": "ibm-scale-csi"
@@ -97,60 +40,15 @@ curl --fail --silent --show-error \
   }'
 ```
 
-| `accessMode` | PVCs created | Topology |
-|---|---:|---|
-| `ReadWriteOnce` | One per replica | Dedicated workspace per sandbox |
-| `ReadWriteMany` | One total | Shared workspace across all sandboxes |
+The response's `attachment.claimName` is the PVC that the runtime mounts in its own execution
+environment. Use `ReadWriteMany` when several Pods must mount the same context.
 
-## Existing PVC
-
-An existing claim requires an explicit read policy. Multiple sandboxes require the PVC to support
-`ReadWriteMany`.
+## List contexts
 
 ```sh
 curl --fail --silent --show-error \
   -H "X-SH-Auth: $CS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -X POST "$CS_URL/v1/sandbox-pools" \
-  -d '{
-    "name": "readers",
-    "replicas": 3,
-    "workspace": {
-      "claimName": "prepared-workspace",
-      "readOnly": true
-    }
-  }'
-```
-
-Set `readOnly` to `false` for explicit read-write attachment. Context Service never deletes this
-caller-owned PVC.
-
-## Existing WarmPool
-
-The `SandboxWarmPool` and SandboxTemplate must already exist. Context Service creates
-SandboxClaims; compute and storage configuration come from the template.
-
-```sh
-curl --fail --silent --show-error \
-  -H "X-SH-Auth: $CS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -X POST "$CS_URL/v1/sandbox-pools" \
-  -d '{
-    "name": "fast-review",
-    "replicas": 3,
-    "warmPoolRef": "research-agents",
-    "workspace": {}
-  }'
-```
-
-`warmPoolRef` cannot be combined with workspace settings.
-
-## List pools
-
-```sh
-curl --fail --silent --show-error \
-  -H "X-SH-Auth: $CS_TOKEN" \
-  "$CS_URL/v1/sandbox-pools"
+  "$CS_URL/v1/namespaces/team1/contexts"
 ```
 
 ## Read status
@@ -158,13 +56,16 @@ curl --fail --silent --show-error \
 ```sh
 curl --fail --silent --show-error \
   -H "X-SH-Auth: $CS_TOKEN" \
-  "$CS_URL/v1/sandbox-pools/shared-review"
+  "$CS_URL/v1/namespaces/team1/contexts/shared-review"
 ```
 
-## Release
+## Delete
 
 ```sh
 curl --fail --silent --show-error \
   -H "X-SH-Auth: $CS_TOKEN" \
-  -X DELETE "$CS_URL/v1/sandbox-pools/shared-review"
+  -X DELETE "$CS_URL/v1/namespaces/team1/contexts/shared-review"
 ```
+
+Deletion is rejected with `409` while the context has consumers. Sandbox-pool examples were removed
+with the API; see [Removed: sandbox pools](api.md#removed-sandbox-pools).

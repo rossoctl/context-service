@@ -1,99 +1,28 @@
-# Serverless Harness integration
+# Moca integration
 
-Serverless Harness is the workload-facing control plane. Context Service is the allocation layer.
-Agent workflows call SH; SH calls Context Service when workload-scoped allocation is enabled.
-
-```text
-Agent workload --> SH /workloads --> Context Service /v1/sandbox-pools
-Agent workload --> SH /runs      --> sandbox lease and execution
-```
-
-An SH workload may forward an optional `sandboxProfile` name. This selects a platform-managed
-runtime without exposing arbitrary Kubernetes Pod configuration through the workload API:
-
-```json
-{
-  "name": "bugstone-review",
-  "sandboxes": 3,
-  "sandboxProfile": "bugstone-runner",
-  "workspace": {"size": "5Gi", "shared": false}
-}
-```
-
-The SH integration should pass `sandboxProfile` unchanged to Context Service. Omitting it selects
-the Context Service default runtime. Adding this field to the SH workload API is a corresponding
-change in the Serverless Harness repository.
-
-## Identity
-
-Context Service requires an allocation `name`. SH uses the requested workload name, or generates
-one when the caller omits it.
+Moca is the workload-facing control plane. It creates and selects the execution
+environments (sandboxes) that run agents. Context Service stores the context those environments
+use.
 
 ```text
-SH workloadId  <-->  CS sandbox-pool name  <-->  Kubernetes workload label
-shared-review       shared-review              context.rossoctl.io/pool=shared-review
+Agent workload --> Moca /runs           --> sandbox lease and execution
+Moca           --> Context Service /v1/contexts --> PVC mounted by the sandbox
 ```
 
-SH returns the CS allocation name to its caller as `workloadId`.
+## Context attachment
 
-## Redis workload record
-
-SH stores the workload record returned by Context Service. For `workloadId: "shared-review"`, the
-entry is conceptually:
+Moca creates or reads a named context and mounts the returned PVC in its own execution environment:
 
 ```text
-Redis key
-sh:workload:shared-review
-
-Redis value
-{
-  "workloadId": "shared-review",
-  "status": "ready",
-  "replicas": 3,
-  "readyReplicas": 3,
-  "sandboxSelector": "context.rossoctl.io/pool=shared-review",
-  "workspace": {
-    "size": "5Gi",
-    "accessMode": "ReadWriteMany",
-    "storageClass": "ibm-scale-csi"
-  }
-}
+POST /v1/contexts      {"name": "shared-review", "namespace": "team1", "type": "workspace", ...}
+attachment             {"kind": "pvc", "claimName": "context-shared-review"}
 ```
 
-The Redis key identifies the workload. Its JSON value contains the Kubernetes selector and the
-latest allocation status returned by Context Service.
+Moca owns sandbox creation, routing, Redis leases, and release. Context Service owns the context's
+lifecycle, revisions, snapshots, access, backup, and sync. Deleting a sandbox never deletes its
+context; delete the context explicitly when it is no longer needed.
 
-## Run routing
+## Migration from sandbox pools
 
-A run request supplies the workload identity:
-
-```json
-{
-  "workloadId": "shared-review",
-  "sessionId": "bugstone/leaf-1"
-}
-```
-
-SH then:
-
-1. Reads `sh:workload:shared-review` from Redis.
-2. Obtains `context.rossoctl.io/pool=shared-review` from `sandboxSelector`.
-3. Passes the selector to its existing Redis leasing and sandbox-routing code.
-4. Executes the run in an eligible Sandbox Pod.
-
-The agent workflow sees `workloadId`; it does not need to know the Kubernetes label.
-
-## Persistence boundaries
-
-Context Service does not maintain a workload database. It reconstructs allocation status from
-labeled Kubernetes resources after a restart.
-
-SH persists its workload record in Redis so later `/runs` requests can resolve `workloadId` to the
-selector. Redis therefore needs durable storage if workload routing must survive loss of the Redis
-Pod.
-
-## Optional integration
-
-When Context Service is not configured, existing SH `/runs` requests continue to use the static
-`KAGENTI_SANDBOX_POOL_SELECTOR`. Workload lifecycle endpoints are available only when the optional
-Context Service integration is enabled.
+Earlier integrations called `/v1/sandbox-pools` so that Context Service created Sandboxes and
+workspace PVCs. That API has been removed. See [Removed: sandbox pools](api.md#removed-sandbox-pools).

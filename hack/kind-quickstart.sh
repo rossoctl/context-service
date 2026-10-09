@@ -12,8 +12,6 @@ readonly IMAGE
 readonly NAMESPACE="serverless-harness"
 readonly LOCAL_PATH_VERSION="v0.0.37"
 readonly LOCAL_PATH_MANIFEST="https://raw.githubusercontent.com/rancher/local-path-provisioner/${LOCAL_PATH_VERSION}/deploy/local-path-storage.yaml"
-readonly AGENT_SANDBOX_VERSION="v1.0.0"
-readonly AGENT_SANDBOX_MANIFEST="https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/sandbox-with-extensions.yaml"
 
 # Set DOCKER_BUILD_FLAGS to --load when using Podman
 DOCKER_BUILD_FLAGS=${DOCKER_BUILD_FLAGS:-""}
@@ -23,7 +21,7 @@ usage() {
 Usage: hack/kind-quickstart.sh [up|demo|demo-clean|smoke|down]
 
   up      Create or reuse a Kind cluster and deploy Context Service.
-  demo    Create example contexts and sandbox pools, then show their status.
+  demo    Create example contexts, mount them in a Pod, then show their status.
   demo-clean
           Delete the example resources but keep the Kind cluster.
   smoke   Verify storage discovery and a complete context PVC lifecycle.
@@ -103,19 +101,14 @@ up() {
 
   kubectl_kind apply -f "$LOCAL_PATH_MANIFEST"
   kubectl_kind -n local-path-storage rollout status deployment/local-path-provisioner --timeout=2m
-  kubectl_kind apply -f "$AGENT_SANDBOX_MANIFEST"
-  kubectl_kind -n agent-sandbox-system rollout status deployment/agent-sandbox-controller --timeout=2m
 
   docker build ${DOCKER_BUILD_FLAGS} --tag "$IMAGE" "$ROOT_DIR"
   kind load docker-image --name "$CLUSTER_NAME" "$IMAGE"
 
   kubectl_kind apply -f "$ROOT_DIR/deploy/kind/namespace.yaml"
-  kubectl_kind apply -f "$ROOT_DIR/deploy/examples/sandbox-profile.yaml"
   kubectl_kind apply -f "$ROOT_DIR/deploy/context-service.yaml"
   kubectl_kind -n "$NAMESPACE" set image deployment/context-service \
     context-service="$IMAGE"
-  kubectl_kind -n "$NAMESPACE" set env deployment/context-service \
-    CS_SANDBOX_IMAGE=busybox:1.36
   kubectl_kind -n "$NAMESPACE" patch service context-service --type merge \
     --patch '{"spec":{"type":"NodePort","ports":[{"name":"http","port":8080,"targetPort":"http","nodePort":30080}]}}'
   kubectl_kind -n "$NAMESPACE" rollout status deployment/context-service --timeout=2m
@@ -145,17 +138,6 @@ create_demo_context() {
   contextctl_demo ctx create "$name" --type "$type" --size "$size" >/dev/null
 }
 
-create_demo_pool() {
-  local name="$1"
-  shift
-
-  if demo_exists sb "$name"; then
-    echo "Reusing sandbox pool $name"
-    return
-  fi
-  contextctl_demo sb create "$name" "$@" >/dev/null
-}
-
 demo_clean() {
   require kubectl
   require curl
@@ -165,14 +147,10 @@ demo_clean() {
   fi
 
   wait_for_http "http://127.0.0.1:${HOST_PORT}/healthz" >/dev/null
-  for pool_name in demo-solo demo-team demo-dedicated demo-shared demo-readonly; do
-    contextctl_demo sb delete "$pool_name" >/dev/null 2>&1 || true
-  done
-  kubectl_kind -n "$NAMESPACE" delete pod demo-agent demo-storage-setup --ignore-not-found --wait=true >/dev/null
+  kubectl_kind -n "$NAMESPACE" delete pod demo-agent --ignore-not-found --wait=true >/dev/null
   for context_name in demo-workspace demo-memory demo-artifacts; do
     contextctl_demo ctx delete "$context_name" >/dev/null 2>&1 || true
   done
-  kubectl_kind delete -f "$ROOT_DIR/deploy/kind/demo-rwx.yaml" --ignore-not-found >/dev/null
   echo "Demo resources deleted"
 }
 
@@ -218,75 +196,6 @@ spec:
 EOF
   kubectl_kind -n "$NAMESPACE" wait --for=condition=Ready pod/demo-agent --timeout=2m >/dev/null
 
-  echo "Creating example sandbox pools..."
-  kubectl_kind apply -f "$ROOT_DIR/deploy/kind/demo-rwx.yaml" >/dev/null
-
-  kubectl_kind -n "$NAMESPACE" apply -f - >/dev/null <<'EOF'
-apiVersion: v1
-kind: Pod
-metadata:
-  name: demo-storage-setup
-spec:
-  restartPolicy: Never
-  containers:
-    - name: setup
-      image: busybox:1.36
-      command:
-        - sh
-        - -c
-        - |
-          chown 65532:65532 /shared /readonly
-          chmod 0770 /shared /readonly
-          rm -f /shared/demo.txt /shared/.context-service-shared-check
-          echo context-service-demo > /readonly/example.txt
-          chown 65532:65532 /readonly/example.txt
-      securityContext:
-        runAsUser: 0
-      volumeMounts:
-        - {name: shared, mountPath: /shared}
-        - {name: readonly, mountPath: /readonly}
-  volumes:
-    - name: shared
-      hostPath:
-        path: /var/context-service-demo/shared
-        type: DirectoryOrCreate
-    - name: readonly
-      hostPath:
-        path: /var/context-service-demo/readonly
-        type: DirectoryOrCreate
-EOF
-  kubectl_kind -n "$NAMESPACE" wait --for=jsonpath='{.status.phase}'=Succeeded \
-    pod/demo-storage-setup --timeout=2m >/dev/null
-  kubectl_kind -n "$NAMESPACE" delete pod demo-storage-setup --wait=true >/dev/null
-
-  create_demo_pool demo-dedicated --sandbox-profile shell --replicas 2 --workspace-size 1Gi
-  create_demo_pool demo-shared --sandbox-profile shell --shared --replicas 2 \
-    --workspace-size 1Gi --storage-class demo-rwx
-  create_demo_pool demo-readonly --sandbox-profile shell --claim demo-readonly-workspace \
-    --read-only --replicas 2
-  contextctl_demo sb wait demo-dedicated --timeout 2m >/dev/null
-  contextctl_demo sb wait demo-shared --timeout 2m >/dev/null
-  contextctl_demo sb wait demo-readonly --timeout 2m >/dev/null
-
-  local shared_marker="/workspace/.context-service-shared-check"
-  local shared_value
-  kubectl_kind -n "$NAMESPACE" exec sandbox-demo-shared-0 -- \
-    sh -c "echo shared-workspace-ready > '$shared_marker'"
-  shared_value="$(kubectl_kind -n "$NAMESPACE" exec sandbox-demo-shared-1 -- cat "$shared_marker" 2>/dev/null || true)"
-  kubectl_kind -n "$NAMESPACE" exec sandbox-demo-shared-0 -- rm -f "$shared_marker"
-  if [[ "$shared_value" != "shared-workspace-ready" ]]; then
-    echo "shared workspace could not be read from both demo sandboxes" >&2
-    exit 1
-  fi
-  if [[ "$(kubectl_kind -n "$NAMESPACE" exec sandbox-demo-readonly-0 -- cat /workspace/example.txt)" != "context-service-demo" ]]; then
-    echo "read-only workspace content was not available to the demo sandbox" >&2
-    exit 1
-  fi
-  if kubectl_kind -n "$NAMESPACE" exec sandbox-demo-readonly-0 -- touch /workspace/should-fail >/dev/null 2>&1; then
-    echo "read-only workspace unexpectedly allowed a write" >&2
-    exit 1
-  fi
-
   contextctl_demo status
   echo
   echo "Explore with: contextctl status"
@@ -297,7 +206,6 @@ smoke() {
   local endpoint="http://127.0.0.1:${HOST_PORT}"
   local context_name="quickstart-$$"
   local consumer_name="context-${context_name}-consumer"
-  local pool_name="quickstart-pool-$$"
   local response
 
   require kubectl
@@ -316,7 +224,6 @@ smoke() {
   fi
 
   cleanup_smoke() {
-    CS_URL="$endpoint" "$ROOT_DIR/bin/contextctl" sandbox-pool delete "$pool_name" >/dev/null 2>&1 || true
     kubectl_kind -n "$NAMESPACE" delete pod "$consumer_name" --ignore-not-found --wait=false >/dev/null 2>&1 || true
     curl --silent --show-error --connect-timeout 2 --max-time 10 --request DELETE \
       "$endpoint/v1/namespaces/$NAMESPACE/contexts/$context_name" >/dev/null 2>&1 || true
@@ -368,15 +275,9 @@ EOF
     "$endpoint/v1/namespaces/$NAMESPACE/contexts/$context_name" >/dev/null
   kubectl_kind -n "$NAMESPACE" wait --for=delete "pvc/context-$context_name" --timeout=2m
 
-  CS_URL="$endpoint" CS_STORAGE_CLASS=local-path \
-    "$ROOT_DIR/bin/contextctl" sandbox-pool create "$pool_name"
-  CS_URL="$endpoint" "$ROOT_DIR/bin/contextctl" sandbox-pool wait "$pool_name" --timeout 2m
-  kubectl_kind -n "$NAMESPACE" get sandboxes,pvc \
-    -l "context.rossoctl.io/pool=$pool_name"
-  CS_URL="$endpoint" "$ROOT_DIR/bin/contextctl" sandbox-pool delete "$pool_name" >/dev/null
   trap - EXIT
 
-  echo "Smoke test passed: context storage and sandbox pool lifecycles are working"
+  echo "Smoke test passed: context storage lifecycle is working"
 }
 
 down() {

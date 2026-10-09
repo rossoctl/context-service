@@ -13,18 +13,6 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]
-  - apiGroups: ["agents.x-k8s.io"]
-    resources: ["sandboxes"]
-    verbs: ["create", "get", "list", "delete"]
-  - apiGroups: ["extensions.agents.x-k8s.io"]
-    resources: ["sandboxclaims"]
-    verbs: ["create", "get", "list", "delete"]
-  - apiGroups: ["extensions.agents.x-k8s.io"]
-    resources: ["sandboxwarmpools"]
-    verbs: ["get", "list"]
-  - apiGroups: ["extensions.agents.x-k8s.io"]
-    resources: ["sandboxtemplates"]
-    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -110,8 +98,6 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: CS_SANDBOX_IMAGE
-              value: ghcr.io/rossoctl/serverless-harness-sandbox:latest
           ports:
             - name: http
               containerPort: 8080

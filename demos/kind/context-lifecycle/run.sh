@@ -15,10 +15,35 @@ cctl() {
     "$ROOT_DIR/bin/contextctl" "$@"
 }
 
+# start_pod NAME CONTEXT mounts the context PVC at /workspace in a plain Pod.
+start_pod() {
+  kctl -n "$NAMESPACE" apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $1
+spec:
+  restartPolicy: Never
+  containers:
+    - name: shell
+      image: busybox:1.36
+      command: ["sh", "-c", "sleep infinity"]
+      volumeMounts:
+        - {name: workspace, mountPath: /workspace}
+  volumes:
+    - name: workspace
+      persistentVolumeClaim: {claimName: context-$2}
+EOF
+  kctl -n "$NAMESPACE" wait --for=condition=Ready "pod/$1" --timeout=3m >/dev/null
+}
+
+stop_pod() {
+  kctl -n "$NAMESPACE" delete pod "$1" --ignore-not-found --wait=true >/dev/null 2>&1 || true
+}
+
 cleanup_demo() {
-  for pool in lifecycle-consumer lifecycle-source lifecycle-producer; do
-    cctl sb delete "$pool" >/dev/null 2>&1 || true
-    kctl -n "$NAMESPACE" wait --for=delete "pod/sandbox-${pool}-0" --timeout=2m >/dev/null 2>&1 || true
+  for pod in lifecycle-consumer lifecycle-source lifecycle-producer; do
+    stop_pod "$pod"
   done
   cctl ctx delete lifecycle-copy --backend pvc >/dev/null 2>&1 || true
   cctl ctx delete lifecycle-demo --backend pvc >/dev/null 2>&1 || true
@@ -65,33 +90,28 @@ cleanup_demo
 
 echo "Creating a CSI-backed context and producer..."
 cctl ctx create lifecycle-demo --storage-class csi-hostpath-sc >/dev/null
-cctl sb create lifecycle-producer --sandbox-profile shell --claim context-lifecycle-demo --read-write >/dev/null
-cctl sb wait lifecycle-producer --timeout 3m >/dev/null
-kctl -n "$NAMESPACE" exec sandbox-lifecycle-producer-0 -- sh -c 'printf "saved by producer\n" > /workspace/handoff.txt && sync'
-cctl sb delete lifecycle-producer >/dev/null
-kctl -n "$NAMESPACE" wait --for=delete pod/sandbox-lifecycle-producer-0 --timeout=2m >/dev/null 2>&1 || true
+start_pod lifecycle-producer lifecycle-demo
+kctl -n "$NAMESPACE" exec lifecycle-producer -- sh -c 'printf "saved by producer\n" > /workspace/handoff.txt && sync'
+stop_pod lifecycle-producer
 
 echo "Creating immutable snapshot baseline..."
 cctl ctx snapshot create lifecycle-demo baseline --backend pvc
 
 echo "Changing the source after the snapshot..."
-cctl sb create lifecycle-source --sandbox-profile shell --claim context-lifecycle-demo --read-write >/dev/null
-cctl sb wait lifecycle-source --timeout 3m >/dev/null
-kctl -n "$NAMESPACE" exec sandbox-lifecycle-source-0 -- sh -c 'printf "newer source data\n" > /workspace/newer.txt && sync'
-cctl sb delete lifecycle-source >/dev/null
-kctl -n "$NAMESPACE" wait --for=delete pod/sandbox-lifecycle-source-0 --timeout=2m >/dev/null 2>&1 || true
+start_pod lifecycle-source lifecycle-demo
+kctl -n "$NAMESPACE" exec lifecycle-source -- sh -c 'printf "newer source data\n" > /workspace/newer.txt && sync'
+stop_pod lifecycle-source
 
 echo "Cloning baseline into a writable context..."
 cctl ctx snapshot clone lifecycle-demo@baseline lifecycle-copy --backend pvc >/dev/null
-cctl sb create lifecycle-consumer --sandbox-profile shell --claim context-lifecycle-copy --read-write >/dev/null
-cctl sb wait lifecycle-consumer --timeout 3m >/dev/null
-value="$(kctl -n "$NAMESPACE" exec sandbox-lifecycle-consumer-0 -- cat /workspace/handoff.txt)"
+start_pod lifecycle-consumer lifecycle-copy
+value="$(kctl -n "$NAMESPACE" exec lifecycle-consumer -- cat /workspace/handoff.txt)"
 [[ "$value" == "saved by producer" ]]
-if kctl -n "$NAMESPACE" exec sandbox-lifecycle-consumer-0 -- test -e /workspace/newer.txt >/dev/null 2>&1; then
+if kctl -n "$NAMESPACE" exec lifecycle-consumer -- test -e /workspace/newer.txt >/dev/null 2>&1; then
   echo "snapshot isolation failed: clone contains newer source data" >&2
   exit 1
 fi
-kctl -n "$NAMESPACE" exec sandbox-lifecycle-consumer-0 -- sh -c 'printf "clone only\n" > /workspace/clone.txt && sync'
+kctl -n "$NAMESPACE" exec lifecycle-consumer -- sh -c 'printf "clone only\n" > /workspace/clone.txt && sync'
 
 echo
 cctl ctx snapshot list lifecycle-demo --backend pvc
