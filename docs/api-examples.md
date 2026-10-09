@@ -1,7 +1,7 @@
 # API examples
 
 These examples call Context Service directly. Agent workloads normally use a runtime integration
-such as [Moca](serverless-harness.md).
+such as [Moca](moca.md).
 
 ```sh
 export CS_URL=https://example.test/context-service

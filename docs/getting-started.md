@@ -75,7 +75,7 @@ make kind-down
 
 ```sh
 kubectl apply -f deploy/context-service.yaml
-kubectl -n serverless-harness rollout status deployment/context-service
+kubectl -n context-service rollout status deployment/context-service
 ```
 
 Before production, update the namespace and Context Service image in

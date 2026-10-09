@@ -50,7 +50,7 @@ Environment:
   CS_URL                 Service URL (default http://localhost:8080)
   CS_TOKEN               Gateway token for public access
   CS_SUBJECT             Authenticated identity as kind:name (default user:anonymous)
-  CS_NAMESPACE           Default context namespace (default serverless-harness)
+  CS_NAMESPACE           Default context namespace (default context-service)
   CS_STORAGE_CLASS       Default storage class for create
   CS_CONTEXT_HOME        Local context directory (default ~/.contexts)
 
@@ -115,7 +115,7 @@ type statusView struct {
 
 func showStatus(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"status"}) }
 	if err := flags.Parse(args); err != nil {
@@ -260,7 +260,7 @@ func contextCommand(c *client.Client, args []string) error {
 func createContext(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context create", flag.ContinueOnError)
 	backend := flags.String("backend", "pvc", "storage backend: pvc or filesystem")
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	contextType := flags.String("type", "workspace", "context type")
 	size := flags.String("size", "1Gi", "storage size")
 	storageClass := flags.String("storage-class", os.Getenv("CS_STORAGE_CLASS"), "storage class")
@@ -298,7 +298,7 @@ func createContext(c *client.Client, args []string) error {
 func listContexts(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context list", flag.ContinueOnError)
 	backend := flags.String("backend", "all", "storage backend: all, pvc, or filesystem")
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"context", "list"}) }
 	if err := flags.Parse(args); err != nil {
@@ -343,7 +343,7 @@ func listContexts(c *client.Client, args []string) error {
 func getContext(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context get", flag.ContinueOnError)
 	backend := flags.String("backend", "pvc", "storage backend: pvc or filesystem")
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"context", "get"}) }
 	name, err := parseContextName(flags, args)
@@ -583,7 +583,7 @@ func pushContextWithContext(ctx context.Context, c *client.Client, args []string
 	flags := flag.NewFlagSet("context sync push", flag.ContinueOnError)
 	remoteName := flags.String("remote-name", "", "remote context name (default local name)")
 	target := flags.String("to", "", "S3 destination (s3://bucket/prefix)")
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	image := flags.String("helper-image", "busybox:1.36", "temporary transfer Pod image")
 	s3Endpoint := flags.String("s3-endpoint", os.Getenv("CS_S3_ENDPOINT"), "S3-compatible endpoint")
 	s3Region := flags.String("s3-region", envOr("CS_S3_REGION", envOr("AWS_REGION", "us-east-1")), "S3 region")
@@ -699,7 +699,7 @@ func pushContextWithContext(ctx context.Context, c *client.Client, args []string
 func pullContext(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context sync pull", flag.ContinueOnError)
 	name := flags.String("name", "", "local context name (default remote name)")
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	image := flags.String("helper-image", "busybox:1.36", "temporary transfer Pod image")
 	s3Endpoint := flags.String("s3-endpoint", os.Getenv("CS_S3_ENDPOINT"), "S3-compatible endpoint")
 	s3Region := flags.String("s3-region", envOr("CS_S3_REGION", envOr("AWS_REGION", "us-east-1")), "S3 region")
@@ -1129,7 +1129,7 @@ func formatTransferElapsed(value time.Duration) string {
 
 func removeContext(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context delete", flag.ContinueOnError)
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	force := flags.Bool("force", false, "delete despite active or declared consumers")
 	flags.Usage = func() { showHelp([]string{"context", "delete"}) }
 	name, err := parseContextName(flags, args)
@@ -1350,7 +1350,7 @@ Run "contextctl help context COMMAND" for command options.
 
 Options:
   --backend BACKEND     pvc (default) or filesystem
-  --namespace NAME      Kubernetes namespace (default CS_NAMESPACE or serverless-harness)
+  --namespace NAME      Kubernetes namespace (default CS_NAMESPACE or context-service)
   --type TYPE           Context type (default workspace)
   --size SIZE           Storage size (default 1Gi)
   --storage-class NAME  Kubernetes storage class (default CS_STORAGE_CLASS)

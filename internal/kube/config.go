@@ -29,7 +29,7 @@ func LoadConfig() (Config, error) {
 	}
 
 	return Config{
-		Namespace:   envOr("CS_NAMESPACE", "serverless-harness"),
+		Namespace:   envOr("CS_NAMESPACE", "context-service"),
 		UploadImage: os.Getenv("CS_UPLOAD_IMAGE"),
 		PodName:     os.Getenv("POD_NAME"),
 		RESTConfig:  restConfig,

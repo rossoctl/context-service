@@ -2,13 +2,13 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: context-service
-  namespace: serverless-harness
+  namespace: context-service
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: context-service
-  namespace: serverless-harness
+  namespace: context-service
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -18,11 +18,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: context-service
-  namespace: serverless-harness
+  namespace: context-service
 subjects:
   - kind: ServiceAccount
     name: context-service
-    namespace: serverless-harness
+    namespace: context-service
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -63,7 +63,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: context-service
-    namespace: serverless-harness
+    namespace: context-service
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -73,7 +73,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: context-service
-  namespace: serverless-harness
+  namespace: context-service
   labels:
     app.kubernetes.io/name: context-service
 spec:
@@ -140,7 +140,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: context-service
-  namespace: serverless-harness
+  namespace: context-service
   labels:
     app.kubernetes.io/name: context-service
 spec:

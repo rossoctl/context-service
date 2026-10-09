@@ -276,11 +276,11 @@ func TestContextSyncPushRejectsTypeMismatchBeforeTransfer(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/namespaces/serverless-harness/contexts/remote-workspace" {
+		if r.URL.Path != "/v1/namespaces/context-service/contexts/remote-workspace" {
 			t.Fatalf("unexpected request: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"name":"remote-workspace","namespace":"serverless-harness","type":"workspace","status":"ready","storage":{"backend":"pvc","size":"1Gi","accessMode":"ReadWriteOnce","storageClass":"standard"},"attachment":{"kind":"pvc","claimName":"context-remote-workspace"}}`))
+		_, _ = w.Write([]byte(`{"name":"remote-workspace","namespace":"context-service","type":"workspace","status":"ready","storage":{"backend":"pvc","size":"1Gi","accessMode":"ReadWriteOnce","storageClass":"standard"},"attachment":{"kind":"pvc","claimName":"context-remote-workspace"}}`))
 	}))
 	defer server.Close()
 
@@ -296,11 +296,11 @@ func TestContextListIncludesLocalAndKubernetesContexts(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/namespaces/serverless-harness/contexts" {
+		if r.URL.Path != "/v1/namespaces/context-service/contexts" {
 			t.Fatalf("unexpected request: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"items":[{"name":"cluster-demo","namespace":"serverless-harness","type":"workspace","status":"ready","storage":{"backend":"pvc","size":"1Gi","accessMode":"ReadWriteOnce","storageClass":"standard"},"attachment":{"kind":"pvc","claimName":"context-cluster-demo"}}]}`))
+		_, _ = w.Write([]byte(`{"items":[{"name":"cluster-demo","namespace":"context-service","type":"workspace","status":"ready","storage":{"backend":"pvc","size":"1Gi","accessMode":"ReadWriteOnce","storageClass":"standard"},"attachment":{"kind":"pvc","claimName":"context-cluster-demo"}}]}`))
 	}))
 	defer server.Close()
 

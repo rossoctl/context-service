@@ -74,7 +74,7 @@ type graphBackup struct {
 func graphContext(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context graph", flag.ContinueOnError)
 	backend := flags.String("backend", "all", "storage backend: all, pvc, or filesystem")
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"context", "graph"}) }
 	if err := flags.Parse(args); err != nil {

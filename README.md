@@ -98,7 +98,7 @@ contextctl ctx sync push demo --remote-name cloud-demo
 Keep later sessions backed up automatically while you work:
 
 ```sh
-contextctl ctx backup start demo --to pvc://serverless-harness/cloud-demo
+contextctl ctx backup start demo --to pvc://context-service/cloud-demo
 claude --continue
 contextctl ctx graph
 ```
@@ -115,5 +115,5 @@ See the [complete local-to-PVC demo](demos/local/local-to-pvc/) for pull, restor
 - [Memory and knowledge](docs/derived-memory.md) and [query API](docs/context-query.md)
 - [Design and workflows](docs/design.md)
 - [API reference](docs/api.md)
-- [Moca integration](docs/serverless-harness.md)
+- [Moca integration](docs/moca.md)
 - [Vision](VISION.md)

@@ -55,6 +55,6 @@ This model creates opportunities for:
 
 The vision is intentionally broader than the first implementation.
 
-This repository began with one concrete problem: dynamically creating sandbox compute with durable workspace storage for serverless-harness. That slice showed where the boundary belongs: runtimes such as Moca own execution environments, and Context Service owns the context they mount.
+This repository began with one concrete problem: dynamically creating sandbox compute with durable workspace storage for Moca (then named serverless-harness). That slice showed where the boundary belongs: runtimes such as Moca own execution environments, and Context Service owns the context they mount.
 
 Broader memory and knowledge capabilities will be added only as working use cases make them clear.

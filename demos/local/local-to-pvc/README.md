@@ -13,7 +13,7 @@ same cluster. Set the storage class for the PVC you want to demonstrate:
 ```sh
 make build
 export PATH="$PWD/bin:$PATH"
-export CS_NAMESPACE=serverless-harness
+export CS_NAMESPACE=context-service
 export CS_STORAGE_CLASS=ibm-scale-csi
 ```
 
@@ -49,7 +49,7 @@ revision on the PVC.
 ## Keep later changes backed up
 
 ```sh
-contextctl ctx backup start demo --to pvc://serverless-harness/cloud-demo
+contextctl ctx backup start demo --to pvc://context-service/cloud-demo
 claude --continue
 ```
 

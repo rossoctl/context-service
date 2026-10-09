@@ -23,7 +23,7 @@ Or use a PVC-backed Context Service context:
 
 ```sh
 contextctl ctx create cloud-demo --type state
-contextctl ctx backup start demo --to pvc://serverless-harness/cloud-demo
+contextctl ctx backup start demo --to pvc://context-service/cloud-demo
 ```
 
 The background worker runs immediately, after harness capture events, and at the configured

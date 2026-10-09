@@ -14,7 +14,7 @@ import (
 
 func contextAccess(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context access", flag.ContinueOnError)
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"context", "access"}) }
 	name, err := parseContextName(flags, args)
@@ -49,7 +49,7 @@ func contextAccess(c *client.Client, args []string) error {
 
 func contextGrant(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context grant", flag.ContinueOnError)
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	subjectValue := flags.String("subject", "", "subject kind:name")
 	permissionValue := flags.String("permissions", "read", "comma-separated permissions")
 	flags.Usage = func() { showHelp([]string{"context", "grant"}) }
@@ -74,7 +74,7 @@ func contextGrant(c *client.Client, args []string) error {
 
 func contextGrants(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context grants", flag.ContinueOnError)
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"context", "grants"}) }
 	name, err := parseContextName(flags, args)
@@ -102,7 +102,7 @@ func contextGrants(c *client.Client, args []string) error {
 
 func contextRevoke(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context revoke", flag.ContinueOnError)
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	subjectValue := flags.String("subject", "", "subject kind:name")
 	flags.Usage = func() { showHelp([]string{"context", "revoke"}) }
 	name, err := parseContextName(flags, args)
@@ -122,7 +122,7 @@ func contextRevoke(c *client.Client, args []string) error {
 
 func contextConsumers(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context consumers", flag.ContinueOnError)
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"context", "consumers"}) }
 	name, err := parseContextName(flags, args)
@@ -154,7 +154,7 @@ func contextConsumers(c *client.Client, args []string) error {
 
 func contextAudit(c *client.Client, args []string) error {
 	flags := flag.NewFlagSet("context audit", flag.ContinueOnError)
-	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "serverless-harness"), "Kubernetes namespace")
+	namespace := flags.String("namespace", envOr("CS_NAMESPACE", "context-service"), "Kubernetes namespace")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"context", "audit"}) }
 	name, err := parseContextName(flags, args)
