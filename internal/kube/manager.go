@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rossoctl/context-service/internal/contextresource"
 	"github.com/rossoctl/context-service/internal/storageclass"
@@ -15,6 +16,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
@@ -243,19 +245,49 @@ func NewManager(config Config) (*Manager, error) {
 	// the helper and API cannot skew. Without either setting, those two
 	// operations return ErrUnsupported and the rest of the API still works.
 	if config.UploadImage == "" && config.PodName != "" {
-		pod, err := coreClient.CoreV1().Pods(config.Namespace).Get(context.Background(), config.PodName, metav1.GetOptions{})
+		image, err := resolveUploadImage(context.Background(), coreClient, config.Namespace, config.PodName, imageDigestPollInterval, imageDigestPollTimeout)
 		if err != nil {
-			return nil, fmt.Errorf("resolve context-service upload image: %w", err)
+			return nil, err
+		}
+		config.UploadImage = image
+	}
+	return &Manager{config: config, core: coreClient, dynamic: dynamicClient}, nil
+}
+
+const (
+	imageDigestPollInterval = time.Second
+	imageDigestPollTimeout  = 30 * time.Second
+)
+
+var errImageDigestUnavailable = errors.New("context-service container image digest is unavailable")
+
+// resolveUploadImage reads this pod's own context-service image digest. On a
+// first start the kubelet can report the container as running before it fills
+// in ImageID, so poll briefly instead of failing (and restarting) at once.
+// API errors are returned immediately; only an empty digest is retried.
+func resolveUploadImage(ctx context.Context, core kubernetes.Interface, namespace, podName string, interval, timeout time.Duration) (string, error) {
+	var image string
+	err := wait.PollUntilContextTimeout(ctx, interval, timeout, true, func(ctx context.Context) (bool, error) {
+		pod, err := core.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Errorf("resolve context-service upload image: %w", err)
 		}
 		for _, status := range pod.Status.ContainerStatuses {
 			if status.Name == "context-service" && status.ImageID != "" {
-				config.UploadImage = strings.TrimPrefix(strings.TrimPrefix(status.ImageID, "docker-pullable://"), "docker://")
-				break
+				image = strings.TrimPrefix(strings.TrimPrefix(status.ImageID, "docker-pullable://"), "docker://")
+				return true, nil
 			}
 		}
-		if config.UploadImage == "" {
-			return nil, errors.New("context-service container image digest is unavailable")
+		return false, nil
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("resolve context-service upload image: %w", ctx.Err())
 		}
+		if wait.Interrupted(err) {
+			return "", fmt.Errorf("%w after %s", errImageDigestUnavailable, timeout)
+		}
+		return "", err
 	}
-	return &Manager{config: config, core: coreClient, dynamic: dynamicClient}, nil
+	return image, nil
 }

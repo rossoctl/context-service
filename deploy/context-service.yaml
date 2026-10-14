@@ -103,6 +103,9 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            # POD_NAME lets the service look up its own image digest for
+            # upload and export helper pods. Setting CS_UPLOAD_IMAGE instead
+            # skips that lookup and uses the given image.
             - name: POD_NAME
               valueFrom:
                 fieldRef:
