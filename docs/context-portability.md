@@ -8,14 +8,18 @@ Service storage.
 `contextctl ctx export NAME` creates a compressed `.context` bundle containing:
 
 - the context manifest;
-- native harness state under `harnesses/` or derived `memory/`, `knowledge/`, and `artifacts/` content; and
+- native harness state under `harnesses/`, derived `memory/`, `knowledge/`, and `artifacts/`
+  content, or plain files under `workspace/`; and
 - a SHA-256 inventory in `checksums.json`.
 
 Machine-specific attachments and paths are not used to attach the imported context. Import verifies
 the inventory, rejects unsafe archive entries, and installs into a new context without overwriting an
 existing one. Revision history and derivation provenance remain part of the portable manifest.
-Bundles use consumer-readable permissions (`0755` directories and `0644` files) so non-root agents
-can read them from a read-only mount. Local imports remain private (`0700` directories and `0600` files).
+Bundles use consumer-readable permissions so non-root agents can read them from a read-only mount:
+directories are `0755`, a file whose owner-execute bit is set is `0755`, and every other file is
+`0644`. Import applies the same rule, so an executable script stays executable. Setuid, setgid,
+sticky, and group or world write bits are never stored or restored. Local imports remain private:
+`0700` directories, `0700` executable files, and `0600` other files.
 
 ```text
 ~/.contexts/demo                 demo.context                 another machine
@@ -23,6 +27,29 @@ can read them from a read-only mount. Local imports remain private (`0700` direc
 └── harnesses/         ───────▶ ├── checksums.json ───────▶ ├── manifest.json
                                └── harnesses/                └── harnesses/
 ```
+
+## Bundle a directory
+
+`contextctl ctx pack DIR -o FILE` builds a `workspace` bundle from an ordinary directory, such as a
+small example repository, so that Moca can upload it without first capturing a local context. Files
+are stored under `workspace/`, and the context name defaults to the directory's base name.
+
+```sh
+contextctl ctx pack ./demo-repo -o demo-repo.context
+contextctl ctx pack ./demo-repo -o demo-repo.context --name kubecon-demo --json
+```
+
+- `.git` directories and files are skipped unless `--include-git` is set.
+- Symbolic links and special files are rejected, as they are by export.
+- The upload limits are checked while packing, so a bundle that packs is not rejected for size at
+  upload: 10,000 tar entries, 256 MiB per file, 1 GiB of expanded content, and 256 MiB compressed.
+  A small PVC can still lower the expanded limit to 90 percent of its request.
+- `--type` accepts only `workspace`. Use `ctx export` for captured state and derived contexts.
+- `--json` prints `path`, `name`, `type`, `files`, `bytes`, and `revision`. The revision is the
+  one Context Service reports after the upload.
+
+A bundle that contains `workspace/` is rejected by a Context Service built before the root existed.
+Upgrade the server before clients upload packed bundles.
 
 ## PVC sync
 
@@ -70,6 +97,12 @@ Export or import a local filesystem context:
 ```sh
 contextctl ctx export demo
 contextctl ctx import demo.context --name demo-copy
+```
+
+Bundle a plain directory as a workspace context:
+
+```sh
+contextctl ctx pack ./demo-repo -o demo-repo.context
 ```
 
 Push a local filesystem context to a PVC context, or pull its current revision:

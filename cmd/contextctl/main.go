@@ -220,6 +220,8 @@ func contextCommand(c *client.Client, args []string) error {
 		return exportContext(args[1:])
 	case "import":
 		return importContext(args[1:])
+	case "pack":
+		return packContext(args[1:])
 	case "sync":
 		return syncContext(c, args[1:])
 	case "backup":
@@ -534,6 +536,41 @@ func exportContext(args []string) error {
 	}
 	fmt.Printf("Exported %s to %s\n", name, bundle.File)
 	fmt.Printf("Files: %d (%s)\n", bundle.Files, formatBytes(bundle.Bytes))
+	return nil
+}
+
+func packContext(args []string) error {
+	flags := flag.NewFlagSet("context pack", flag.ContinueOnError)
+	contextType := flags.String("type", "workspace", "context type")
+	name := flags.String("name", "", "context name (default: the directory's base name)")
+	output := flags.String("output", "", "output .context file")
+	flags.StringVar(output, "o", "", "output .context file (shorthand)")
+	includeGit := flags.Bool("include-git", false, "keep .git entries")
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	flags.Usage = func() { showHelp([]string{"context", "pack"}) }
+	directory, err := parseSingleArgument(flags, args, "directory")
+	if err != nil {
+		return err
+	}
+	if *output == "" {
+		flags.Usage()
+		return errors.New("an output file is required (-o FILE)")
+	}
+	result, err := localcontext.Pack(directory, *output, localcontext.PackOptions{
+		Type: *contextType, Name: *name, IncludeGit: *includeGit,
+	})
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		encoded, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Println(string(encoded))
+		return nil
+	}
+	fmt.Printf("Packed %s to %s\n", directory, result.Path)
+	fmt.Printf("Context: %s (type %s)\n", result.Name, result.Type)
+	fmt.Printf("Files: %d (%s)\n", result.Files, formatBytes(result.Bytes))
+	fmt.Printf("Revision: %s\n", result.Revision)
 	return nil
 }
 
@@ -1321,6 +1358,7 @@ Commands:
   detach NAME          Stop automatic capture for a project
   export NAME          Write a portable .context bundle
   import FILE          Import a portable .context bundle
+  pack DIR             Bundle a directory as a workspace .context file
   sync push|pull       Transfer state between local and remote storage
   backup COMMAND       Back up local state automatically
   derive memory        Generate durable memory from captured state
@@ -1488,6 +1526,25 @@ Write a portable, checksummed .context bundle. Machine-local harness attachments
 Options:
   --output FILE          Output file (default NAME.context)
   --json                 Print JSON
+`)
+		case "pack":
+			fmt.Print(`Usage: contextctl context pack DIR -o FILE [options]
+
+Bundle an ordinary directory as a workspace .context file for upload. Files are stored under
+workspace/. Owner-executable files keep mode 0755; other files are stored as 0644. Symbolic links
+and special files are rejected, and .git is skipped unless --include-git is set. The upload
+limits (10,000 entries, 256 MiB per file, 1 GiB expanded, 256 MiB compressed) are enforced
+while packing.
+
+Options:
+  -o, --output FILE      Output file (required)
+  --name NAME            Context name (default: the directory's base name)
+  --type TYPE            Context type (default and only supported value: workspace)
+  --include-git          Keep .git directories and files
+  --json                 Print JSON
+
+Example:
+  contextctl ctx pack ./demo-repo -o demo-repo.context
 `)
 		case "import":
 			fmt.Print(`Usage: contextctl context import FILE [options]

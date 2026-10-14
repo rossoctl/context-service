@@ -125,6 +125,20 @@ type RevisionList struct {
 	Items []Revision `json:"items"`
 }
 
+// Limits on an uploaded .context bundle. The server enforces them on upload
+// and materialization; contextctl checks them before upload so a bundle that
+// would be rejected fails while it is being packed.
+const (
+	// UploadMaxArchiveBytes caps the compressed bundle (the request body): 256 MiB.
+	UploadMaxArchiveBytes = 256 << 20
+	// UploadMaxFileBytes caps one file in the bundle: 256 MiB.
+	UploadMaxFileBytes = 256 << 20
+	// UploadMaxExpandedBytes caps the sum of file sizes in the bundle: 1 GiB.
+	UploadMaxExpandedBytes = 1 << 30
+	// UploadMaxEntries caps the tar entries, files and directories together: 10,000.
+	UploadMaxEntries = 10_000
+)
+
 // UploadResult describes content that was verified and materialized in a Context.
 type UploadResult struct {
 	Revision      string `json:"revision"`

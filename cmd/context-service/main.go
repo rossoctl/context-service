@@ -91,10 +91,10 @@ func runUploadHelper() {
 }
 
 const (
-	uploadMaxFileSize    = 256 << 20
-	uploadMaxTotalSize   = 1 << 30
-	uploadMaxEntries     = 10_000
-	exportMaxArchiveSize = int64(256 << 20)
+	uploadMaxFileSize    = contextresource.UploadMaxFileBytes
+	uploadMaxTotalSize   = contextresource.UploadMaxExpandedBytes
+	uploadMaxEntries     = contextresource.UploadMaxEntries
+	exportMaxArchiveSize = int64(contextresource.UploadMaxArchiveBytes)
 )
 
 type boundedWriter struct {
@@ -156,11 +156,7 @@ func exportMaterializedRevision(workspace, revision string, maxBytes int64, outp
 			return err
 		}
 		header.Name = relative
-		if info.IsDir() {
-			header.Mode = 0o755
-		} else {
-			header.Mode = 0o644
-		}
+		header.Mode = int64(localcontext.PortableMode(info))
 		if err := tarWriter.WriteHeader(header); err != nil {
 			return err
 		}
@@ -355,7 +351,9 @@ func verifyMaterializedRevision(store *localcontext.Store, root string, expected
 			}
 			return nil
 		}
-		if !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 {
+		// The revision already covers the executable bit, so a regular file
+		// may be 0644 or 0755 but never anything else.
+		if !info.Mode().IsRegular() || info.Mode()&(os.ModePerm|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != localcontext.PortableMode(info) {
 			return fmt.Errorf("materialized file has invalid mode or type: %s", path)
 		}
 		return nil

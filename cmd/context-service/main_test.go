@@ -307,3 +307,94 @@ func TestMaterializeUploadRespectsExpandedLimit(t *testing.T) {
 		t.Fatal("materialization exceeded the PVC-derived expanded limit")
 	}
 }
+
+func TestMaterializeUploadKeepsExecutableWorkspaceFiles(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "demo-repo")
+	for name, mode := range map[string]os.FileMode{"src/greet.py": 0o644, "test.sh": 0o755} {
+		target := filepath.Join(directory, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, []byte(name+"\n"), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(target, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bundle := filepath.Join(root, "demo.context")
+	packed, err := localcontext.Pack(directory, bundle, localcontext.PackOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	upload := func(id string) (string, error) {
+		t.Helper()
+		input, err := os.Open(bundle)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer input.Close()
+		result, err := materializeUpload(workspace, id, "workspace", input)
+		return result.Revision, err
+	}
+	revision, err := upload("first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revision != packed.Revision {
+		t.Fatalf("materialized revision = %s, packed revision = %s", revision, packed.Revision)
+	}
+	materialized := filepath.Join(workspace, ".context-service", "materialized", revision, "workspace")
+	for name, want := range map[string]os.FileMode{"test.sh": 0o755, "src/greet.py": 0o644} {
+		info, err := os.Stat(filepath.Join(materialized, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != want {
+			t.Errorf("%s mode = %#o, want %#o", name, info.Mode().Perm(), want)
+		}
+	}
+	// A repeated upload verifies the existing materialized revision.
+	if _, err := upload("second"); err != nil {
+		t.Fatalf("verify of executable revision failed: %v", err)
+	}
+
+	var output bytes.Buffer
+	if err := exportMaterializedRevision(workspace, revision, exportMaxArchiveSize, &output); err != nil {
+		t.Fatal(err)
+	}
+	gzipReader, err := gzip.NewReader(bytes.NewReader(output.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	modes := map[string]int64{}
+	tarReader := tar.NewReader(gzipReader)
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		modes[header.Name] = header.Mode
+	}
+	if modes["workspace/test.sh"] != 0o755 || modes["workspace/src/greet.py"] != 0o644 {
+		t.Fatalf("exported modes = %v", modes)
+	}
+
+	script := filepath.Join(materialized, "test.sh")
+	for _, tampered := range []os.FileMode{0o644, 0o775, 0o711} {
+		if err := os.Chmod(script, tampered); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := upload("tampered"); err == nil {
+			t.Errorf("verify accepted materialized script with mode %#o", tampered)
+		}
+	}
+}

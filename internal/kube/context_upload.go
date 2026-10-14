@@ -27,8 +27,8 @@ import (
 const (
 	contextUploadMount            = "/workspace"
 	contextUploadVolume           = "context"
-	contextUploadMaxExpandedBytes = int64(1 << 30)
-	contextExportMaxArchiveBytes  = int64(256 << 20)
+	contextUploadMaxExpandedBytes = int64(contextresource.UploadMaxExpandedBytes)
+	contextExportMaxArchiveBytes  = int64(contextresource.UploadMaxArchiveBytes)
 )
 
 var errContextHelperImage = fmt.Errorf("%w: set CS_UPLOAD_IMAGE or POD_NAME to enable context uploads and exports", contextresource.ErrUnsupported)

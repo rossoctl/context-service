@@ -29,7 +29,31 @@ const (
 	localDirMode        = 0o700
 )
 
-var portableRoots = []string{"harnesses", "memory", "knowledge", "artifacts"}
+// portableRoots are the context directories carried by revisions, bundles and
+// imports. Missing roots are skipped, so adding a root leaves the revisions of
+// existing contexts unchanged. A server must know a root before it accepts a
+// bundle that contains it: older servers reject workspace/ entries.
+var portableRoots = []string{"harnesses", "memory", "knowledge", "artifacts", "workspace"}
+
+// PortableMode is the only mode a bundle stores for an entry: 0755 for a
+// directory or an owner-executable regular file, 0644 for any other file.
+// Setuid, setgid, sticky and group or world write bits are never carried.
+func PortableMode(info fs.FileInfo) os.FileMode {
+	if info.IsDir() || isExecutable(info.Mode()) {
+		return portableDirMode
+	}
+	return portableFileMode
+}
+
+func isExecutable(mode os.FileMode) bool {
+	return mode.IsRegular() && mode.Perm()&0o100 != 0
+}
+
+// executableMode adds execute permission wherever fileMode grants read, so
+// 0644 becomes 0755 and the local 0600 becomes 0700.
+func executableMode(fileMode os.FileMode) os.FileMode {
+	return fileMode | (fileMode&0o444)>>2
+}
 
 type Bundle struct {
 	FormatVersion int    `json:"formatVersion"`
@@ -57,9 +81,10 @@ var defaultImportLimits = ImportLimits{
 }
 
 type revisionEntry struct {
-	path     string
-	checksum string
-	size     int64
+	path       string
+	checksum   string
+	size       int64
+	executable bool
 }
 
 // Revision identifies the portable content of a context. Capture timestamps
@@ -109,22 +134,37 @@ func (s *Store) revisionUnlocked(manifest Manifest) (Revision, error) {
 			if err != nil {
 				return err
 			}
-			entries = append(entries, revisionEntry{path: filepath.ToSlash(relative), checksum: digest, size: info.Size()})
+			entries = append(entries, revisionEntry{
+				path: filepath.ToSlash(relative), checksum: digest, size: info.Size(),
+				executable: isExecutable(info.Mode()),
+			})
 			return nil
 		})
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return Revision{}, err
 		}
 	}
+	return revisionDigest(manifest.Type, entries), nil
+}
+
+// revisionDigest hashes the type and the sorted file entries. An executable
+// file appends an "exec" field after its size. Every entry path starts with a
+// portable root and contains a slash, so the field cannot be mistaken for the
+// next entry, and a tree without executable files hashes exactly as it did
+// before modes were carried.
+func revisionDigest(contextType string, entries []revisionEntry) Revision {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].path < entries[j].path })
 	hash := sha256.New()
-	_, _ = fmt.Fprintf(hash, "type\x00%s\x00", manifest.Type)
+	_, _ = fmt.Fprintf(hash, "type\x00%s\x00", contextType)
 	var bytes int64
 	for _, item := range entries {
 		_, _ = fmt.Fprintf(hash, "%s\x00%s\x00%d\x00", item.path, item.checksum, item.size)
+		if item.executable {
+			_, _ = io.WriteString(hash, "exec\x00")
+		}
 		bytes += item.size
 	}
-	return Revision{Digest: hex.EncodeToString(hash.Sum(nil)), Files: len(entries), Bytes: bytes}, nil
+	return Revision{Digest: hex.EncodeToString(hash.Sum(nil)), Files: len(entries), Bytes: bytes}
 }
 
 type bundleChecksums struct {
@@ -139,6 +179,7 @@ type bundleFile struct {
 	data       []byte
 	size       int64
 	checksum   string
+	executable bool
 }
 
 // Export writes a portable, gzip-compressed .context bundle. Attachments are
@@ -165,28 +206,12 @@ func (s *Store) exportUnlocked(manifest Manifest, outputPath string) (Bundle, er
 	if outputPath == "" {
 		outputPath = name + ".context"
 	}
-	outputPath, err := filepath.Abs(outputPath)
+	outputPath, err := newBundlePath(outputPath)
 	if err != nil {
 		return Bundle{}, err
 	}
-	if _, err := os.Lstat(outputPath); err == nil {
-		return Bundle{}, fmt.Errorf("bundle already exists: %s", outputPath)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return Bundle{}, err
-	}
 
-	manifest.Attachments = nil
-	manifest.Path = ""
-	manifestData, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		return Bundle{}, err
-	}
-	manifestData = append(manifestData, '\n')
-	files := []bundleFile{{
-		name: "manifest.json", data: manifestData,
-		size: int64(len(manifestData)), checksum: checksumBytes(manifestData),
-	}}
-
+	var files []bundleFile
 	for _, rootName := range portableRoots {
 		root := filepath.Join(s.contextDir(name), rootName)
 		if err := filepath.WalkDir(root, func(filePath string, entry fs.DirEntry, walkErr error) error {
@@ -210,19 +235,71 @@ func (s *Store) exportUnlocked(manifest Manifest, outputPath string) (Bundle, er
 			if err != nil {
 				return err
 			}
-			checksum, err := checksumFile(filePath)
+			file, err := newBundleFile(filepath.ToSlash(relative), filePath, info)
 			if err != nil {
 				return err
 			}
-			files = append(files, bundleFile{
-				name: filepath.ToSlash(relative), sourcePath: filePath,
-				size: info.Size(), checksum: checksum,
-			})
+			files = append(files, file)
 			return nil
 		}); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return Bundle{}, err
 		}
 	}
+
+	manifest.Attachments = nil
+	manifest.Path = ""
+	count, totalBytes, err := writeContextBundle(outputPath, manifest, files, 0)
+	if err != nil {
+		return Bundle{}, err
+	}
+	return Bundle{
+		FormatVersion: bundleFormatVersion, Name: name, Type: manifest.Type,
+		File: outputPath, Files: count, Bytes: totalBytes,
+	}, nil
+}
+
+// newBundlePath resolves outputPath and refuses to replace anything there,
+// including a dangling symlink.
+func newBundlePath(outputPath string) (string, error) {
+	outputPath, err := filepath.Abs(outputPath)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Lstat(outputPath); err == nil {
+		return "", fmt.Errorf("bundle already exists: %s", outputPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	return outputPath, nil
+}
+
+func newBundleFile(name, sourcePath string, info fs.FileInfo) (bundleFile, error) {
+	checksum, err := checksumFile(sourcePath)
+	if err != nil {
+		return bundleFile{}, err
+	}
+	return bundleFile{
+		name: name, sourcePath: sourcePath, size: info.Size(), checksum: checksum,
+		executable: isExecutable(info.Mode()),
+	}, nil
+}
+
+// writeContextBundle adds manifest.json and checksums.json to the content
+// files and writes the bundle. It returns the number of files counted in a
+// Bundle (content plus manifest) and their total size. A positive
+// maxArchiveBytes caps the compressed output.
+func writeContextBundle(outputPath string, manifest Manifest, content []bundleFile, maxArchiveBytes int64) (int, int64, error) {
+	manifestData, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return 0, 0, err
+	}
+	manifestData = append(manifestData, '\n')
+	files := make([]bundleFile, 0, len(content)+2)
+	files = append(files, bundleFile{
+		name: "manifest.json", data: manifestData,
+		size: int64(len(manifestData)), checksum: checksumBytes(manifestData),
+	})
+	files = append(files, content...)
 	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
 
 	checksums := bundleChecksums{
@@ -237,20 +314,18 @@ func (s *Store) exportUnlocked(manifest Manifest, outputPath string) (Bundle, er
 	}
 	checksumData, err := json.MarshalIndent(checksums, "", "  ")
 	if err != nil {
-		return Bundle{}, err
+		return 0, 0, err
 	}
 	checksumData = append(checksumData, '\n')
+	count := len(files)
 	files = append(files, bundleFile{
 		name: "checksums.json", data: checksumData, size: int64(len(checksumData)),
 	})
 
-	if err := writeBundle(outputPath, files); err != nil {
-		return Bundle{}, err
+	if err := writeBundle(outputPath, files, maxArchiveBytes); err != nil {
+		return 0, 0, err
 	}
-	return Bundle{
-		FormatVersion: bundleFormatVersion, Name: name, Type: manifest.Type,
-		File: outputPath, Files: len(files) - 1, Bytes: totalBytes,
-	}, nil
+	return count, totalBytes, nil
 }
 
 // Import verifies and atomically installs a portable .context bundle. The
@@ -300,6 +375,7 @@ func (s *Store) importReader(input io.Reader, name string, dirMode, fileMode os.
 	}()
 
 	computed := map[string]string{}
+	executables := map[string]bool{}
 	seen := map[string]bool{}
 	var totalSize int64
 	entries := 0
@@ -360,6 +436,9 @@ func (s *Store) importReader(input io.Reader, name string, dirMode, fileMode os.
 			if archivePath != "checksums.json" {
 				computed[archivePath] = hex.EncodeToString(hash.Sum(nil))
 			}
+			if archivePath != "checksums.json" && archivePath != "manifest.json" && header.Mode&0o100 != 0 {
+				executables[destination] = true
+			}
 		default:
 			return Manifest{}, fmt.Errorf("unsupported bundle entry type for %s", archivePath)
 		}
@@ -404,7 +483,7 @@ func (s *Store) importReader(input io.Reader, name string, dirMode, fileMode os.
 	if err := os.Remove(filepath.Join(staging, "checksums.json")); err != nil {
 		return Manifest{}, err
 	}
-	if err := applyImportModes(staging, dirMode, fileMode); err != nil {
+	if err := applyImportModes(staging, dirMode, fileMode, executables); err != nil {
 		return Manifest{}, err
 	}
 	if err := os.Rename(staging, destination); err != nil {
@@ -415,7 +494,10 @@ func (s *Store) importReader(input io.Reader, name string, dirMode, fileMode os.
 	return manifest, nil
 }
 
-func applyImportModes(root string, dirMode, fileMode os.FileMode) error {
+// applyImportModes sets every directory to dirMode and every file to
+// fileMode, or to its executable form for a file the bundle marked
+// owner-executable. Other mode bits in the bundle are ignored.
+func applyImportModes(root string, dirMode, fileMode os.FileMode, executables map[string]bool) error {
 	return filepath.WalkDir(root, func(filePath string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -423,12 +505,31 @@ func applyImportModes(root string, dirMode, fileMode os.FileMode) error {
 		mode := fileMode
 		if entry.IsDir() {
 			mode = dirMode
+		} else if executables[filePath] {
+			mode = executableMode(fileMode)
 		}
 		return os.Chmod(filePath, mode)
 	})
 }
 
-func writeBundle(outputPath string, files []bundleFile) (resultErr error) {
+// archiveLimitWriter fails once more than limit bytes are written, so an
+// oversized bundle stops early instead of being written in full.
+type archiveLimitWriter struct {
+	w         io.Writer
+	limit     int64
+	remaining int64
+}
+
+func (w *archiveLimitWriter) Write(data []byte) (int, error) {
+	if int64(len(data)) > w.remaining {
+		return 0, fmt.Errorf("context bundle exceeds the %d-byte compressed upload limit", w.limit)
+	}
+	n, err := w.w.Write(data)
+	w.remaining -= int64(n)
+	return n, err
+}
+
+func writeBundle(outputPath string, files []bundleFile, maxArchiveBytes int64) (resultErr error) {
 	temporary, err := os.CreateTemp(filepath.Dir(outputPath), ".context-export-")
 	if err != nil {
 		return err
@@ -443,7 +544,11 @@ func writeBundle(outputPath string, files []bundleFile) (resultErr error) {
 	if err := temporary.Chmod(0o600); err != nil {
 		return err
 	}
-	gzipWriter := gzip.NewWriter(temporary)
+	var archive io.Writer = temporary
+	if maxArchiveBytes > 0 {
+		archive = &archiveLimitWriter{w: temporary, limit: maxArchiveBytes, remaining: maxArchiveBytes}
+	}
+	gzipWriter := gzip.NewWriter(archive)
 	tarWriter := tar.NewWriter(gzipWriter)
 	for _, directory := range bundleDirectories(files) {
 		header := &tar.Header{Name: directory, Mode: portableDirMode, Typeflag: tar.TypeDir}
@@ -452,7 +557,11 @@ func writeBundle(outputPath string, files []bundleFile) (resultErr error) {
 		}
 	}
 	for _, file := range files {
-		header := &tar.Header{Name: file.name, Mode: portableFileMode, Size: file.size, Typeflag: tar.TypeReg}
+		mode := int64(portableFileMode)
+		if file.executable {
+			mode = portableDirMode
+		}
+		header := &tar.Header{Name: file.name, Mode: mode, Size: file.size, Typeflag: tar.TypeReg}
 		if err := tarWriter.WriteHeader(header); err != nil {
 			return err
 		}

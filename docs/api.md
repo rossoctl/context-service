@@ -135,7 +135,10 @@ responses do not include the PVC attachment; Moca receives content as bundles, n
 The upload token expires after five minutes and succeeds once. The client sends
 `application/vnd.rossoctl.context` with `Authorization: Bearer <token>`. The compressed limit is
 256 MiB. The expanded limit is 1 GiB or 90 percent of the PVC request, whichever is smaller, with at
-most 10,000 entries. The bundle type must match the Context type.
+most 10,000 entries. The bundle type must match the Context type. Content may live under
+`harnesses/`, `memory/`, `knowledge/`, `artifacts/`, or `workspace/`; `contextctl ctx pack` builds
+a `workspace` bundle from a plain directory. Files are materialized as `0644`, or `0755` when the
+bundle marks them owner-executable.
 
 If the export fails before the first byte, Context Service returns an error status. If it fails
 later, Context Service aborts the connection, so a partial bundle never looks like a complete `200`.

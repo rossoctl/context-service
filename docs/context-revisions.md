@@ -35,3 +35,9 @@ POST /v1/namespaces/{namespace}/contexts/{name}/revisions
 
 The POST endpoint records a verified revision after content has been published to the backing
 store. Revision IDs identify portable content, not the compressed bundle used to transport it.
+
+A revision covers the context type and, for every file under a portable root, its path, SHA-256,
+size, and whether its owner-execute bit is set. Other permission bits and timestamps are not part of
+the revision. A context without executable files keeps the revision it had before executable bits
+were carried, and adding the `workspace/` root does not change the revision of a context that has
+no `workspace/` directory.

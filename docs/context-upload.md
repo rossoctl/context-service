@@ -11,7 +11,10 @@ Sandboxes, and Moca never mounts the Context PVC.
 
 1. Moca creates a Context for the user with `POST /internal/v1/contexts`.
 2. Moca requests an upload capability and gives the client its `uploadUrl` and `token`.
-3. The client sends the `.context` bundle with `PUT /v1/uploads/{id}`.
+3. The client sends the `.context` bundle with `PUT /v1/uploads/{id}`. For a `workspace`
+   Context, `contextctl ctx pack DIR -o FILE` builds the bundle from a plain directory and checks
+   the limits below before upload. See
+   [Bundle a directory](context-portability.md#bundle-a-directory).
 4. A short-lived helper Pod mounts the Context PVC and materializes the bundle in
    `.context-service/materialized/<revision>`. It checks the archive structure, Context type,
    paths, checksums, and size limits, and it rejects symbolic links and unsafe paths.
@@ -34,7 +37,11 @@ Sandboxes, and Moca never mounts the Context PVC.
 - Export requires the service bearer, a delegated subject, `read` access, and a revision that is
   both current and frozen on the same PVC UID. Context Service checks the UID again after the helper
   starts.
-- Materialized directories use `0755`. Materialized files use `0644`.
+- Materialized directories use `0755`. Materialized files use `0644`, or `0755` when the bundle
+  marks them owner-executable. The revision covers that executable bit, and verification rejects any
+  other mode.
+- Bundles with files under `workspace/` require a Context Service that knows that root. Upgrade the
+  server before clients upload packed workspace bundles.
 - Helper Pods run as non-root without a service-account token, and they use the image digest of the
   running Context Service, or `CS_UPLOAD_IMAGE`.
 

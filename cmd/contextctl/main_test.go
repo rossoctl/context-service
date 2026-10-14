@@ -237,6 +237,59 @@ func TestContextExportImport(t *testing.T) {
 	}
 }
 
+func TestContextPackJSONAndImport(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "demo-repo")
+	if err := os.MkdirAll(filepath.Join(directory, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, ".git", "HEAD"), []byte("ref\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "test.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bundlePath := filepath.Join(root, "demo.context")
+	var packErr error
+	output := captureStdout(t, func() {
+		packErr = run([]string{"ctx", "pack", directory, "-o", bundlePath, "--json"})
+	})
+	if packErr != nil {
+		t.Fatal(packErr)
+	}
+	var result localcontext.PackResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("pack JSON: %v\n%s", err, output)
+	}
+	for _, field := range []string{`"path"`, `"name"`, `"type"`, `"files"`, `"bytes"`, `"revision"`} {
+		if !strings.Contains(output, field) {
+			t.Errorf("pack JSON missing %s:\n%s", field, output)
+		}
+	}
+	if result.Name != "demo-repo" || result.Type != "workspace" || result.Files != 1 || len(result.Revision) != 64 {
+		t.Fatalf("pack result = %+v", result)
+	}
+	if err := run([]string{"ctx", "pack", directory, "-o", filepath.Join(root, "state.context"), "--type", "state"}); err == nil {
+		t.Fatal("pack accepted --type state")
+	}
+	if err := run([]string{"ctx", "pack", directory}); err == nil {
+		t.Fatal("pack without -o succeeded")
+	}
+
+	home := filepath.Join(root, "contexts")
+	t.Setenv("CS_CONTEXT_HOME", home)
+	if err := run([]string{"ctx", "import", bundlePath}); err != nil {
+		t.Fatal(err)
+	}
+	revision, err := localcontext.New(home).Revision("demo-repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revision.Digest != result.Revision {
+		t.Fatalf("imported revision = %s, packed revision = %s", revision.Digest, result.Revision)
+	}
+}
+
 func TestContextRevisionsListsCapturedHistory(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "contexts")

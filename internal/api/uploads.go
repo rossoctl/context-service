@@ -17,7 +17,7 @@ import (
 
 const (
 	uploadCapabilityTTL = 5 * time.Minute
-	maxUploadSize       = 256 << 20
+	maxUploadSize       = contextresource.UploadMaxArchiveBytes
 	contextBundleType   = "application/vnd.rossoctl.context"
 	frozenBundleType    = contextBundleType
 )
