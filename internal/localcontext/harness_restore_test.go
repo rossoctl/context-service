@@ -1,10 +1,12 @@
 package localcontext
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -372,4 +374,145 @@ func assertNoFiles(t *testing.T, root, nameContains string) {
 		}
 		return nil
 	})
+}
+
+func codexRolloutAt(id, timestamp, message string) string {
+	return strings.ReplaceAll(codexRollout(id, message), "2026-03-04T05:06:07.890Z", timestamp)
+}
+
+func TestCodexRestoreRefusesUnconfinedSessionBeforeWritingAny(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on Windows")
+	}
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := New(filepath.Join(root, "contexts"))
+	if _, err := store.Create("demo", "state"); err != nil {
+		t.Fatal(err)
+	}
+	// The 2026 thread sorts first, so a confinement check made only while
+	// writing would restore it before refusing the 2027 thread.
+	sessions := map[string]string{
+		"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b": "2026-03-04T05:06:07.890Z",
+		"029a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b": "2027-03-04T05:06:07.890Z",
+	}
+	for id, timestamp := range sessions {
+		source := filepath.Join(root, "source", id+".jsonl")
+		writeFixture(t, source, codexRolloutAt(id, timestamp, "captured"))
+		if _, _, err := store.CaptureSessionFile("demo", "codex", project, id, source); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	codexHome := filepath.Join(root, "codex")
+	outside := filepath.Join(root, "outside")
+	for _, dir := range []string{outside, filepath.Join(codexHome, "sessions")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(codexHome, "sessions", "2027")); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.RestoreCodex("demo", project, codexHome)
+	if err == nil || !strings.Contains(err.Error(), "refusing to write outside") {
+		t.Fatalf("restore error = %v, want confinement refusal", err)
+	}
+	if len(result.Restored) != 0 {
+		t.Fatalf("restored %v despite refusal", result.Restored)
+	}
+	if _, err := os.Stat(filepath.Join(codexHome, "sessions", "2026")); !os.IsNotExist(err) {
+		t.Fatalf("restore created a directory despite refusal: %v", err)
+	}
+	assertNoFiles(t, outside, "")
+}
+
+func TestPiRestoreChecksConfinementBeforeComparing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on Windows")
+	}
+	root := t.TempDir()
+	original := filepath.Join(root, piSessionName+".jsonl")
+	content := piSession("captured")
+	writeFixture(t, original, content)
+	store, project := roundTripStore(t, root, "pi", "", original)
+
+	// An identical copy reached through a planted directory link is refused
+	// during planning rather than reported as already present.
+	agentDir := filepath.Join(root, "pi")
+	canonical, _ := canonicalProject(project)
+	outside := filepath.Join(root, "outside")
+	writeFixture(t, filepath.Join(outside, piSessionName+".jsonl"), content)
+	if err := os.MkdirAll(filepath.Join(agentDir, "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(agentDir, "sessions", PiProjectKey(canonical))); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.RestorePi("demo", project, agentDir, "")
+	if err == nil || !strings.Contains(err.Error(), "refusing to write outside") {
+		t.Fatalf("restore error = %v (result %+v), want confinement refusal", err, result)
+	}
+	assertNoFiles(t, outside, ".tmp")
+}
+
+func TestCodexRestoreRefusesCompressedLocalCopy(t *testing.T) {
+	root := t.TempDir()
+	original := filepath.Join(root, "rollout.jsonl")
+	writeFixture(t, original, codexRollout(codexThreadID, "captured"))
+	store, project := roundTripStore(t, root, "codex", codexThreadID, original)
+
+	codexHome := filepath.Join(root, "codex")
+	compressed := filepath.Join(codexHome, "archived_sessions", "rollout-2026-03-03T21-06-07-"+codexThreadID+".jsonl.zst")
+	writeFixture(t, compressed, "")
+	_, err := store.RestoreCodex("demo", project, codexHome)
+	if err == nil || !strings.Contains(err.Error(), "a compressed copy of Codex session "+codexThreadID+" exists at "+compressed) ||
+		!strings.Contains(err.Error(), "does not compare compressed rollouts") {
+		t.Fatalf("restore error = %v, want compressed-copy refusal", err)
+	}
+	assertNoFiles(t, filepath.Join(codexHome, "sessions"), "")
+}
+
+func TestWriteConfinedFileFallsBackWithoutHardLinks(t *testing.T) {
+	original := linkFile
+	t.Cleanup(func() { linkFile = original })
+	linkFile = func(oldname, newname string) error {
+		return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: syscall.EXDEV}
+	}
+
+	root := t.TempDir()
+	destination := filepath.Join(root, "2026", "03", "04", "rollout.jsonl")
+	if err := writeConfinedFile(root, destination, []byte("first")); err != nil {
+		t.Fatalf("fallback write: %v", err)
+	}
+	assertFileContent(t, destination, "first")
+	if err := writeConfinedFile(root, destination, []byte("second")); err == nil || !strings.Contains(err.Error(), "refusing to overwrite") {
+		t.Fatalf("fallback overwrite error = %v, want refusal", err)
+	}
+	assertFileContent(t, destination, "first")
+	assertNoFiles(t, root, ".tmp")
+
+	// A link failure that is not about hard-link support is not retried.
+	linkFile = func(oldname, newname string) error {
+		return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: syscall.EIO}
+	}
+	other := filepath.Join(root, "other.jsonl")
+	if err := writeConfinedFile(root, other, []byte("data")); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("write error = %v, want EIO", err)
+	}
+	if _, err := os.Stat(other); !os.IsNotExist(err) {
+		t.Fatalf("write left %s after a failed link: %v", other, err)
+	}
+}
+
+func TestCodexThreadID(t *testing.T) {
+	if got := CodexThreadID("rollout-2026-03-04T05-06-07-" + codexThreadID); got != codexThreadID {
+		t.Fatalf("CodexThreadID = %q", got)
+	}
+	if got := CodexThreadID("not-a-rollout"); got != "" {
+		t.Fatalf("CodexThreadID = %q, want empty", got)
+	}
 }

@@ -418,7 +418,6 @@ func restoreContext(args []string) error {
 		return restoreClaudeContext(store, name, *project, *jsonOutput)
 	case "codex":
 		result, err = store.RestoreCodex(name, *project, codexHome())
-		next = "codex resume"
 	case "opencode":
 		opencodeExecutable, lookupErr := exec.LookPath("opencode")
 		if lookupErr != nil {
@@ -446,8 +445,25 @@ func restoreContext(args []string) error {
 		fmt.Printf(" · %d already present", len(result.Unchanged))
 	}
 	fmt.Println()
+	if *harness == "codex" {
+		fmt.Printf("Next:     codex resume %s (Codex finds the session by id; the session keeps its original working directory)\n",
+			codexResumeTarget(result))
+		return nil
+	}
 	fmt.Printf("Next:     cd %s && %s\n", *project, next)
 	return nil
+}
+
+// codexResumeTarget names the thread to resume after a Codex restore: the
+// thread ID when restore covered exactly one session, a placeholder otherwise.
+func codexResumeTarget(result localcontext.RestoreResult) string {
+	sessions := append(append([]string{}, result.Restored...), result.Unchanged...)
+	if len(sessions) == 1 {
+		if id := localcontext.CodexThreadID(sessions[0]); id != "" {
+			return id
+		}
+	}
+	return "<thread id>"
 }
 
 func restoreClaudeContext(store *localcontext.Store, name, project string, jsonOutput bool) error {
@@ -1555,7 +1571,12 @@ overwrites existing local state: Claude requires an empty project state director
 skip identical sessions and refuse differing ones; OpenCode refuses sessions that already exist.
 
 Codex writes to $CODEX_HOME/sessions, Pi to $PI_CODING_AGENT_DIR/sessions (or
-$PI_CODING_AGENT_SESSION_DIR), and OpenCode imports through 'opencode import'.
+$PI_CODING_AGENT_SESSION_DIR), and OpenCode imports through 'opencode import'. Codex and Pi
+check every session before writing any, so a refusal leaves their state untouched; OpenCode
+keeps sessions imported before a failed import.
+
+--project does not change where Codex restores: Codex finds a session by thread ID, and the
+session keeps its original working directory.
 
 Options:
   --project PATH         Override the current destination project

@@ -481,8 +481,16 @@ func TestLocalCodexAndPiRestoreWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := run([]string{"ctx", "restore", "demo", "--harness", "codex", "--project", destination}); err != nil {
-		t.Fatal(err)
+	var restoreErr error
+	output := captureStdout(t, func() {
+		restoreErr = run([]string{"ctx", "restore", "demo", "--harness", "codex", "--project", destination})
+	})
+	if restoreErr != nil {
+		t.Fatal(restoreErr)
+	}
+	// --project does not place a Codex session, so the hint must not cd there.
+	if !strings.Contains(output, "Next:     codex resume "+id+" (") || strings.Contains(output, "cd "+destination) {
+		t.Fatalf("Codex restore hint = %q", output)
 	}
 	restoredRollout := filepath.Join(root, "codex", "sessions", "2026", "03", "04", "rollout-2026-03-04T05-06-07-"+id+".jsonl")
 	if data, err := os.ReadFile(restoredRollout); err != nil || string(data) != rolloutContent {

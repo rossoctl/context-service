@@ -63,20 +63,24 @@ contextctl ctx restore demo --harness pi --project /path/to/project
 | OpenCode | `harnesses/opencode/sessions/<session id>.json` (`opencode export`) | `opencode import`, run in the destination project | Refuses if the session already exists |
 | Pi | `harnesses/pi/sessions/<time>_<id>.jsonl` | `$PI_CODING_AGENT_DIR/sessions/--<project>--/` or `$PI_CODING_AGENT_SESSION_DIR` | Skips identical sessions; refuses if the file differs |
 
-`CODEX_HOME` defaults to `~/.codex` and `PI_CODING_AGENT_DIR` to `~/.pi/agent`. Restore checks
-every session before writing any, so a refusal leaves local state untouched. It writes only below
-the harness's session directory and rejects captured symlinks, session IDs that are not plain
-names, and directory links that would lead outside the session directory.
+`CODEX_HOME` defaults to `~/.codex` and `PI_CODING_AGENT_DIR` to `~/.pi/agent`. Codex and Pi
+restore check every session before writing any, including content conflicts and directory links
+in each destination path, so a refusal leaves local state untouched. OpenCode restore checks that
+no session exists before importing any, but imports are not atomic across sessions: if a later
+import fails, earlier imports remain. Restore writes only below the harness's session directory
+and rejects captured symlinks, session IDs that are not plain names, and directory links that
+would lead outside the session directory.
 
 Caveats:
 
 - Restore copies session files byte for byte. A Codex or Pi session keeps the working directory
   it was captured in, so it resumes most faithfully at the same project path. `codex resume <id>`
   finds a restored rollout by thread ID. The resume picker, which filters by working directory,
-  may not list it.
+  may not list it. `--project` does not change where a Codex session is restored.
 - Codex captures one rollout per thread, under its thread ID. Restore rebuilds Codex's file name
   from the rollout's `session_meta` record, using its UTC start time; Codex names new files with
-  local time.
+  local time. Restore refuses a thread that has a compressed (`.jsonl.zst`) local copy, since it
+  does not compare compressed rollouts.
 - OpenCode stores sessions in its own database, so restore runs `opencode import` instead of
   writing files. OpenCode must be on `PATH`. Import binds each session to the destination project.
   If an import fails partway, the sessions imported before the failure remain.

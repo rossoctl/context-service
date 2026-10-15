@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -46,9 +47,27 @@ func (s *Store) RestoreCodex(name, projectPath, codexHome string) (RestoreResult
 		relative := filepath.Join(timestamp.Format("2006"), timestamp.Format("01"), timestamp.Format("02"),
 			"rollout-"+timestamp.Format("2006-01-02T15-04-05")+"-"+id+".jsonl")
 		existing, err := findCodexRollouts(codexHome, id)
-		return relative, existing, err
+		if err != nil {
+			return "", nil, err
+		}
+		for _, path := range existing {
+			if strings.HasSuffix(path, ".zst") {
+				return "", nil, fmt.Errorf("a compressed copy of Codex session %s exists at %s; restore does not compare compressed rollouts", id, path)
+			}
+		}
+		return relative, existing, nil
 	}
 	return s.restoreSessionFiles(name, codexHarness, projectPath, root, ".jsonl", place)
+}
+
+// CodexThreadID returns the thread ID in a restored Codex rollout name,
+// rollout-<YYYY-MM-DDTHH-MM-SS>-<id>, or "" if name has another shape.
+func CodexThreadID(name string) string {
+	const prefix = len("rollout-2006-01-02T15-04-05-")
+	if !strings.HasPrefix(name, "rollout-") || len(name) <= prefix {
+		return ""
+	}
+	return name[prefix:]
 }
 
 // RestorePi restores captured Pi session files into Pi's per-project session
@@ -173,9 +192,9 @@ func openCodeSessionExists(executable, project, sessionID string) (bool, error) 
 	return false, fmt.Errorf("check local OpenCode session %s: %w: %s", sessionID, err, strings.TrimSpace(stderr.String()))
 }
 
-// restoreSessionFiles places every captured session file, refuses differing
-// local copies before writing anything, then writes new files without
-// replacing any that appear concurrently.
+// restoreSessionFiles places every captured session file and refuses differing
+// local copies and unconfined destinations before writing anything, then
+// writes new files without replacing any that appear concurrently.
 func (s *Store) restoreSessionFiles(name, harness, projectPath, root, extension string, place sessionPlacement) (RestoreResult, error) {
 	manifest, err := s.Get(name)
 	if err != nil {
@@ -221,6 +240,10 @@ func (s *Store) restoreSessionFiles(name, harness, projectPath, root, extension 
 			return RestoreResult{}, fmt.Errorf("refusing to restore %s outside %s", relative, root)
 		}
 		session := strings.TrimSuffix(filepath.Base(relative), extension)
+		destination := filepath.Join(root, relative)
+		if err := checkConfinedDestination(root, destination); err != nil {
+			return RestoreResult{}, fmt.Errorf("restore %s session %s: %w", harnessDisplayName(harness), session, err)
+		}
 		unchanged := false
 		for _, path := range existing {
 			current, err := os.ReadFile(path)
@@ -240,8 +263,10 @@ func (s *Store) restoreSessionFiles(name, harness, projectPath, root, extension 
 			result.Unchanged = append(result.Unchanged, session)
 			continue
 		}
-		plan = append(plan, planned{session: session, destination: filepath.Join(root, relative), data: data})
+		plan = append(plan, planned{session: session, destination: destination, data: data})
 	}
+	// writeConfinedFile repeats the confinement check in case a directory link
+	// appears between planning and writing.
 	for _, item := range plan {
 		if err := writeConfinedFile(root, item.destination, item.data); err != nil {
 			return result, fmt.Errorf("restore %s session %s: %w", harnessDisplayName(harness), item.session, err)
@@ -288,35 +313,13 @@ func (s *Store) capturedSessionFiles(name, harness, extension string) ([]string,
 // symlink out of root and without replacing an existing file. root itself may
 // be a symlink, as harness homes often are; directories below it may not.
 func writeConfinedFile(root, destination string, data []byte) error {
-	parent := filepath.Dir(destination)
-	relative, err := filepath.Rel(root, parent)
-	if err != nil || !filepath.IsLocal(relative) {
-		return fmt.Errorf("refusing to write outside %s: %s", root, destination)
-	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return err
 	}
-	current := root
-	for _, part := range strings.Split(relative, string(filepath.Separator)) {
-		if part == "." {
-			continue
-		}
-		current = filepath.Join(current, part)
-		info, err := os.Lstat(current)
-		if errors.Is(err, os.ErrNotExist) {
-			if err := os.Mkdir(current, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
-				return err
-			}
-			if info, err = os.Lstat(current); err != nil {
-				return err
-			}
-		} else if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			return fmt.Errorf("refusing to write outside %s: %s is not a directory", root, current)
-		}
+	if err := walkConfinedParents(root, destination, true); err != nil {
+		return err
 	}
+	parent := filepath.Dir(destination)
 	temporary, err := os.CreateTemp(parent, ".restore-*.tmp")
 	if err != nil {
 		return err
@@ -329,11 +332,91 @@ func writeConfinedFile(root, destination string, data []byte) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := os.Link(temporary.Name(), destination); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return fmt.Errorf("%s appeared during restore; refusing to overwrite it", destination)
+	err = linkFile(temporary.Name(), destination)
+	if err != nil && linkUnsupported(err) {
+		// Some network and FAT mounts lack hard links. An exclusive create
+		// still never replaces an existing file, though a crash mid-write can
+		// leave a partial destination.
+		err = createExclusive(destination, data)
+	}
+	if errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("%s appeared during restore; refusing to overwrite it", destination)
+	}
+	return err
+}
+
+// linkFile is os.Link, replaceable in tests to simulate filesystems without
+// hard links.
+var linkFile = os.Link
+
+// linkUnsupported reports whether a link failure means the filesystem cannot
+// hard-link the file, rather than that the destination exists.
+func linkUnsupported(err error) bool {
+	for _, errno := range []syscall.Errno{syscall.EXDEV, syscall.EPERM, syscall.ENOTSUP, syscall.EOPNOTSUPP} {
+		if errors.Is(err, errno) {
+			return true
 		}
+	}
+	return false
+}
+
+// createExclusive writes data to a new file at path, failing with
+// fs.ErrExist if path already exists. A failed write removes the file it
+// created.
+func createExclusive(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
 		return err
+	}
+	_, err = file.Write(data)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(path)
+	}
+	return err
+}
+
+// checkConfinedDestination refuses a destination whose existing parent
+// directories below root include a symlink or non-directory, without
+// creating anything. Restore runs it for every session before the first write.
+func checkConfinedDestination(root, destination string) error {
+	return walkConfinedParents(root, destination, false)
+}
+
+// walkConfinedParents checks each parent directory of destination below root,
+// refusing any that is a symlink or not a directory. With create, it makes
+// missing directories; without, it stops at the first missing one, since
+// everything below it will be created fresh.
+func walkConfinedParents(root, destination string, create bool) error {
+	relative, err := filepath.Rel(root, filepath.Dir(destination))
+	if err != nil || !filepath.IsLocal(relative) {
+		return fmt.Errorf("refusing to write outside %s: %s", root, destination)
+	}
+	current := root
+	for _, part := range strings.Split(relative, string(filepath.Separator)) {
+		if part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			if !create {
+				return nil
+			}
+			if err := os.Mkdir(current, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+				return err
+			}
+			if info, err = os.Lstat(current); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("refusing to write outside %s: %s is not a directory", root, current)
+		}
 	}
 	return nil
 }
