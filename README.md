@@ -5,8 +5,8 @@ for the state, memory, knowledge, workspaces, and artifacts that agents create.
 
 It works wherever the agent runs:
 
-- **Local harnesses** — capture native state from Claude Code, Codex, OpenCode, or Pi without
-  requiring Kubernetes or a running service.
+- **Local harnesses** — capture native state from Claude Code, Codex, OpenCode, or Pi, and
+  restore it into the same harness, without requiring Kubernetes or a running service.
 - **Container-native platforms** — manage PVC-backed context and shared workspaces through a
   service API and any CSI storage provider, including IBM Storage Scale. The runtime, such as
   Moca, creates the sandboxes that mount them.

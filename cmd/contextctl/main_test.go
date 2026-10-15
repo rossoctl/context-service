@@ -440,3 +440,62 @@ func TestLoadStatus(t *testing.T) {
 		t.Fatalf("unexpected status: %+v", view)
 	}
 }
+
+func TestLocalCodexAndPiRestoreWorkflow(t *testing.T) {
+	root := t.TempDir()
+	root, _ = filepath.EvalSymlinks(root)
+	project := filepath.Join(root, "project")
+	destination := filepath.Join(root, "destination")
+	for _, dir := range []string{project, destination} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	t.Setenv("CS_CONTEXT_HOME", filepath.Join(root, "contexts"))
+	t.Setenv("CODEX_HOME", filepath.Join(root, "codex"))
+	t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(root, "pi", "agent"))
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+	if err := run([]string{"ctx", "create", "demo", "--type", "state", "--backend", "filesystem"}); err != nil {
+		t.Fatal(err)
+	}
+
+	id := "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b"
+	rollout := filepath.Join(root, "source-codex", "rollout-2026-03-04T05-06-07-"+id+".jsonl")
+	rolloutContent := `{"type":"session_meta","payload":{"id":"` + id + `","timestamp":"2026-03-04T05:06:07Z","cwd":"` + project + `"}}` + "\n"
+	piFile := filepath.Join(root, "source-pi", "2026-03-04T05-06-07-000Z_pi-session.jsonl")
+	piContent := `{"type":"session","version":3,"id":"pi-session","timestamp":"2026-03-04T05:06:07Z","cwd":"` + project + `"}` + "\n"
+	for path, content := range map[string]string{rollout: rolloutContent, piFile: piContent} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event := `{"hook_event_name":"SessionEnd","session_id":"` + id + `","transcript_path":"` + rollout + `"}`
+	if err := codexHookCommand([]string{"--context", "demo", "--project", project}, strings.NewReader(event)); err != nil {
+		t.Fatal(err)
+	}
+	if err := piHookCommand([]string{"--context", "demo", "--project", project, "--session-file", piFile}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run([]string{"ctx", "restore", "demo", "--harness", "codex", "--project", destination}); err != nil {
+		t.Fatal(err)
+	}
+	restoredRollout := filepath.Join(root, "codex", "sessions", "2026", "03", "04", "rollout-2026-03-04T05-06-07-"+id+".jsonl")
+	if data, err := os.ReadFile(restoredRollout); err != nil || string(data) != rolloutContent {
+		t.Fatalf("restored rollout = %q, %v", data, err)
+	}
+	if err := run([]string{"ctx", "restore", "demo", "--harness", "pi", "--project", destination}); err != nil {
+		t.Fatal(err)
+	}
+	restoredPi := filepath.Join(root, "pi", "agent", "sessions", localcontext.PiProjectKey(destination), filepath.Base(piFile))
+	if data, err := os.ReadFile(restoredPi); err != nil || string(data) != piContent {
+		t.Fatalf("restored Pi session = %q, %v", data, err)
+	}
+	if err := run([]string{"ctx", "restore", "demo", "--harness", "gemini"}); err == nil {
+		t.Fatal("unsupported harness restore succeeded")
+	}
+}

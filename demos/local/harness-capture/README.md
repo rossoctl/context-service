@@ -56,5 +56,7 @@ claude --resume
 
 Select the captured session and ask: `What is the project code word?`
 
+Codex, OpenCode, and Pi state restores the same way with `--harness codex`, `opencode`, or `pi`.
+
 See [Harness attachments](../../../docs/harness-attachments.md) for integration details and
 supported harnesses.

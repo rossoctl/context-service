@@ -42,11 +42,46 @@ Inspect the attachment and latest capture with:
 contextctl ctx get demo --backend filesystem
 ```
 
-Manual `capture` and `restore` currently support Claude Code project state:
+## Manual capture and restore
+
+Manual `capture` supports Claude Code project state. Codex, OpenCode, and Pi are captured by
+their attachments. `restore` supports all four harnesses and writes each one back into the same
+harness:
 
 ```sh
 contextctl ctx capture demo --harness claude
 contextctl ctx restore demo --harness claude --project /path/to/project
+contextctl ctx restore demo --harness codex --project /path/to/project
+contextctl ctx restore demo --harness opencode --project /path/to/project
+contextctl ctx restore demo --harness pi --project /path/to/project
 ```
 
-Restore refuses to overwrite existing Claude state for the destination project.
+| Harness | Captured as | Restored to | Existing local state |
+|---|---|---|---|
+| Claude Code | `harnesses/claude/project/` (whole project directory) | `$CLAUDE_CONFIG_DIR/projects/<project key>/` | Refuses if the directory is not empty |
+| Codex | `harnesses/codex/sessions/<thread id>.jsonl` (rollout) | `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<time>-<thread id>.jsonl` | Skips identical rollouts; refuses if a live or archived rollout for the thread differs |
+| OpenCode | `harnesses/opencode/sessions/<session id>.json` (`opencode export`) | `opencode import`, run in the destination project | Refuses if the session already exists |
+| Pi | `harnesses/pi/sessions/<time>_<id>.jsonl` | `$PI_CODING_AGENT_DIR/sessions/--<project>--/` or `$PI_CODING_AGENT_SESSION_DIR` | Skips identical sessions; refuses if the file differs |
+
+`CODEX_HOME` defaults to `~/.codex` and `PI_CODING_AGENT_DIR` to `~/.pi/agent`. Restore checks
+every session before writing any, so a refusal leaves local state untouched. It writes only below
+the harness's session directory and rejects captured symlinks, session IDs that are not plain
+names, and directory links that would lead outside the session directory.
+
+Caveats:
+
+- Restore copies session files byte for byte. A Codex or Pi session keeps the working directory
+  it was captured in, so it resumes most faithfully at the same project path. `codex resume <id>`
+  finds a restored rollout by thread ID. The resume picker, which filters by working directory,
+  may not list it.
+- Codex captures one rollout per thread, under its thread ID. Restore rebuilds Codex's file name
+  from the rollout's `session_meta` record, using its UTC start time; Codex names new files with
+  local time.
+- OpenCode stores sessions in its own database, so restore runs `opencode import` instead of
+  writing files. OpenCode must be on `PATH`. Import binds each session to the destination project.
+  If an import fails partway, the sessions imported before the failure remain.
+- Pi restore follows `PI_CODING_AGENT_SESSION_DIR`, but not a `sessionDir` set in Pi's
+  `settings.json`.
+
+Restore does not translate state between harnesses. A Claude Code capture restores into Claude
+Code only, a Codex capture into Codex only, and so on.
