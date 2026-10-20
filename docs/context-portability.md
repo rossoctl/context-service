@@ -44,11 +44,15 @@ contextctl ctx pack ./demo-repo -o demo-repo.context --name kubecon-demo --json
   parent session's skills and settings do not reach a sandbox by default.
 - When the directory is in a git work tree, files that git would ignore are skipped. That covers
   the `.gitignore` at the repository root, nested `.gitignore` files, and `.git/info/exclude`,
-  with git's pattern rules (negation, directory-only and anchored patterns, `**`). If the
-  directory is a subdirectory of a repository, the `.gitignore` files above it apply too. A nested
-  repository uses its own rules. The global `core.excludesFile` is not read, because it differs
-  between machines. Outside a git work tree, no ignore rules apply. `--no-ignore` turns this off.
-  It is independent of `--include-git` and `--include-claude`.
+  with git's pattern rules (negation, directory-only and anchored patterns, `**`, `?`, bracket
+  expressions including `[!...]` and `[:digit:]`, and escapes). As in git, a file under an ignored
+  directory cannot be re-included. If the directory is a subdirectory of a repository, the
+  `.gitignore` files above it apply too. A nested repository uses its own rules. The global
+  `core.excludesFile` is not read, because it differs between machines. Matching is
+  case-sensitive, as git's is by default on Linux; `core.ignorecase` is not read. Outside a git
+  work tree, no ignore rules apply. `--no-ignore` turns this off. It is independent of
+  `--include-git` and `--include-claude`. A test compares the packed files with
+  `git ls-files --others --exclude-standard` across these pattern forms.
 - Symbolic links and special files are rejected, as they are by export.
 - The upload limits are checked while packing, so a bundle that packs is not rejected for size at
   upload: 10,000 tar entries, 256 MiB per file, 1 GiB of expanded content, and 256 MiB compressed.

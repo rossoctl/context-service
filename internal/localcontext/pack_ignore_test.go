@@ -343,3 +343,48 @@ func TestPackRevisionDependsOnIgnoreState(t *testing.T) {
 		t.Fatal("packing the same tree twice changed the revision")
 	}
 }
+
+func TestPackHonorsNegatedBracketClasses(t *testing.T) {
+	directory := t.TempDir()
+	writeTree(t, directory, map[string]string{
+		".git/HEAD":  "ref\n",
+		".gitignore": "[!a-c]z\n[!0-9]*.txt\n[^x]y\n",
+		"az":         "kept",
+		"bz":         "kept",
+		"dz":         "ignored",
+		"1.txt":      "kept",
+		"a.txt":      "ignored",
+		"xy":         "kept",
+		"zy":         "ignored",
+	})
+	files, _ := packedFiles(t, directory, PackOptions{})
+	assertFiles(t, files, ".gitignore", "az", "bz", "1.txt", "xy")
+}
+
+func TestPackHonorsWhitelistIgnoreFiles(t *testing.T) {
+	directory := t.TempDir()
+	writeTree(t, directory, map[string]string{
+		".git/HEAD":      "ref\n",
+		".gitignore":     "*\n!*/\n!*.go\n",
+		"a.go":           "kept",
+		"b.txt":          "ignored",
+		"sub/c.go":       "kept",
+		"sub/d.txt":      "ignored",
+		"sub/deep/e.txt": "ignored",
+		"sub/deep/f.go":  "kept",
+	})
+	files, _ := packedFiles(t, directory, PackOptions{})
+	assertFiles(t, files, "a.go", "sub/c.go", "sub/deep/f.go")
+
+	directory = t.TempDir()
+	writeTree(t, directory, map[string]string{
+		".git/HEAD":     "ref\n",
+		".gitignore":    "*\n!*/\n!/src/**\n",
+		"src/a.go":      "kept",
+		"src/lib/b.txt": "kept",
+		"other/d.txt":   "ignored",
+		"top.txt":       "ignored",
+	})
+	files, _ = packedFiles(t, directory, PackOptions{})
+	assertFiles(t, files, "src/a.go", "src/lib/b.txt")
+}
