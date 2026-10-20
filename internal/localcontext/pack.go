@@ -32,7 +32,19 @@ type PackOptions struct {
 	// agent-side bookkeeping (settings, skills, per-run notes) does not
 	// round-trip into the packed workspace.
 	IncludeClaude bool
-	Limits        PackLimits
+	// NoIgnore packs files that the repository's .gitignore files and
+	// .git/info/exclude ignore. By default those rules are honored when the
+	// directory is in a git work tree.
+	NoIgnore bool
+	Limits   PackLimits
+}
+
+// PackSkipped counts the entries a pack left out. A skipped directory
+// counts once; its contents are not walked.
+type PackSkipped struct {
+	Git     int `json:"git"`
+	Claude  int `json:"claude"`
+	Ignored int `json:"ignored"`
 }
 
 // PackResult describes a packed bundle. Files, Bytes and Revision describe
@@ -44,6 +56,8 @@ type PackResult struct {
 	Files    int    `json:"files"`
 	Bytes    int64  `json:"bytes"`
 	Revision string `json:"revision"`
+	// Skipped reports what the default filters left out.
+	Skipped PackSkipped `json:"skipped"`
 }
 
 // Pack writes a .context bundle whose workspace/ root holds the files of an
@@ -87,6 +101,23 @@ func Pack(sourceDir, outputPath string, options PackOptions) (PackResult, error)
 		return PackResult{}, err
 	}
 
+	// scopes holds the ignore rules of each directory walked so far; a nil
+	// scope applies no rules.
+	scopes := map[string]*ignoreScope{}
+	if !options.NoIgnore {
+		if scopes[root], err = packRootScope(root); err != nil {
+			return PackResult{}, err
+		}
+	}
+	var skipped PackSkipped
+	skip := func(entry fs.DirEntry, count *int) error {
+		*count++
+		if entry.IsDir() {
+			return fs.SkipDir
+		}
+		return nil
+	}
+
 	var files []bundleFile
 	var entries []revisionEntry
 	var totalBytes int64
@@ -97,19 +128,38 @@ func Pack(sourceDir, outputPath string, options PackOptions) (PackResult, error)
 		if filePath == root {
 			return nil
 		}
-		if entry.Name() == ".git" && !options.IncludeGit {
-			if entry.IsDir() {
-				return fs.SkipDir
+		// Filters run before any limit is counted, so skipped bulk cannot
+		// exceed the upload limits.
+		switch entry.Name() {
+		case ".git":
+			if !options.IncludeGit {
+				return skip(entry, &skipped.Git)
 			}
-			return nil
+		case ".claude":
+			if !options.IncludeClaude {
+				return skip(entry, &skipped.Claude)
+			}
 		}
-		if entry.Name() == ".claude" && !options.IncludeClaude {
-			if entry.IsDir() {
-				return fs.SkipDir
+		scope := scopes[filepath.Dir(filePath)]
+		if entry.Name() != ".git" {
+			excluded, err := scope.excluded(filePath, entry.IsDir())
+			if err != nil {
+				return err
 			}
-			return nil
+			if excluded {
+				return skip(entry, &skipped.Ignored)
+			}
 		}
 		if entry.IsDir() {
+			if options.NoIgnore || entry.Name() == ".git" {
+				// git applies no ignore rules inside its own directory.
+				return nil
+			}
+			child, err := scope.enter(filePath)
+			if err != nil {
+				return err
+			}
+			scopes[filePath] = child
 			return nil
 		}
 		info, err := entry.Info()
@@ -164,6 +214,7 @@ func Pack(sourceDir, outputPath string, options PackOptions) (PackResult, error)
 	return PackResult{
 		Path: outputPath, Name: name, Type: contextType,
 		Files: revision.Files, Bytes: revision.Bytes, Revision: revision.Digest,
+		Skipped: skipped,
 	}, nil
 }
 

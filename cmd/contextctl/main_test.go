@@ -290,6 +290,54 @@ func TestContextPackJSONAndImport(t *testing.T) {
 	}
 }
 
+func TestContextPackSkipsClaudeAndIgnoredFiles(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "repo")
+	for name, content := range map[string]string{
+		".git/HEAD":                 "ref\n",
+		".gitignore":                "__pycache__/\n",
+		".claude/skills/x/SKILL.md": "skill",
+		"__pycache__/a.pyc":         "bytecode",
+		"src/app.py":                "print()",
+	} {
+		target := filepath.Join(directory, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pack := func(name string, flags ...string) (string, localcontext.PackResult) {
+		t.Helper()
+		var packErr error
+		output := captureStdout(t, func() {
+			packErr = run(append([]string{"ctx", "pack", directory, "-o", filepath.Join(root, name+".context"), "--json"}, flags...))
+		})
+		if packErr != nil {
+			t.Fatal(packErr)
+		}
+		var result localcontext.PackResult
+		if err := json.Unmarshal([]byte(output), &result); err != nil {
+			t.Fatalf("pack JSON: %v\n%s", err, output)
+		}
+		return output, result
+	}
+	output, result := pack("default")
+	if !strings.Contains(output, `"skipped"`) || result.Files != 2 ||
+		result.Skipped != (localcontext.PackSkipped{Git: 1, Claude: 1, Ignored: 1}) {
+		t.Fatalf("default pack = %+v\n%s", result, output)
+	}
+	if _, result = pack("claude", "--include-claude"); result.Files != 3 ||
+		result.Skipped != (localcontext.PackSkipped{Git: 1, Ignored: 1}) {
+		t.Fatalf("--include-claude pack = %+v", result)
+	}
+	if _, result = pack("all", "--no-ignore", "--include-claude"); result.Files != 4 ||
+		result.Skipped != (localcontext.PackSkipped{Git: 1}) {
+		t.Fatalf("--no-ignore --include-claude pack = %+v", result)
+	}
+}
+
 func TestContextRevisionsListsCapturedHistory(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "contexts")

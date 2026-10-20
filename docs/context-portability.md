@@ -39,14 +39,32 @@ contextctl ctx pack ./demo-repo -o demo-repo.context
 contextctl ctx pack ./demo-repo -o demo-repo.context --name kubecon-demo --json
 ```
 
-- `.git` directories and files are skipped unless `--include-git` is set.
+- `.git` directories and files are skipped at any depth unless `--include-git` is set.
+- `.claude` directories and files are skipped at any depth unless `--include-claude` is set, so a
+  parent session's skills and settings do not reach a sandbox by default.
+- When the directory is in a git work tree, files that git would ignore are skipped. That covers
+  the `.gitignore` at the repository root, nested `.gitignore` files, and `.git/info/exclude`,
+  with git's pattern rules (negation, directory-only and anchored patterns, `**`). If the
+  directory is a subdirectory of a repository, the `.gitignore` files above it apply too. A nested
+  repository uses its own rules. The global `core.excludesFile` is not read, because it differs
+  between machines. Outside a git work tree, no ignore rules apply. `--no-ignore` turns this off.
+  It is independent of `--include-git` and `--include-claude`.
 - Symbolic links and special files are rejected, as they are by export.
 - The upload limits are checked while packing, so a bundle that packs is not rejected for size at
   upload: 10,000 tar entries, 256 MiB per file, 1 GiB of expanded content, and 256 MiB compressed.
-  A small PVC can still lower the expanded limit to 90 percent of its request.
+  Skipped files do not count toward them. A small PVC can still lower the expanded limit to 90
+  percent of its request.
 - `--type` accepts only `workspace`. Use `ctx export` for captured state and derived contexts.
 - `--json` prints `path`, `name`, `type`, `files`, `bytes`, and `revision`. The revision is the
-  one Context Service reports after the upload.
+  one Context Service reports after the upload. `skipped` counts what the filters left out as
+  `{"git": N, "claude": N, "ignored": N}`. A skipped directory counts once.
+
+The revision covers only the files that were packed, so it depends on the ignore rules as well as
+the source. The same source with different `.gitignore` or `.git/info/exclude` content, or packed
+with and without `--no-ignore` or `--include-claude`, gets a different revision. That is correct
+because the bundles differ, but it means "the same repository on two machines" can produce two
+revisions. A directory with no `.claude` entries and no ignored files keeps the revision it had
+before these filters existed.
 
 A bundle that contains `workspace/` is rejected by a Context Service built before the root existed.
 Upgrade the server before clients upload packed bundles.

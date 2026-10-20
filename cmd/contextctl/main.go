@@ -601,6 +601,7 @@ func packContext(args []string) error {
 	flags.StringVar(output, "o", "", "output .context file (shorthand)")
 	includeGit := flags.Bool("include-git", false, "keep .git entries")
 	includeClaude := flags.Bool("include-claude", false, "keep .claude entries")
+	noIgnore := flags.Bool("no-ignore", false, "pack files the repository's .gitignore rules ignore")
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	flags.Usage = func() { showHelp([]string{"context", "pack"}) }
 	directory, err := parseSingleArgument(flags, args, "directory")
@@ -612,7 +613,8 @@ func packContext(args []string) error {
 		return errors.New("an output file is required (-o FILE)")
 	}
 	result, err := localcontext.Pack(directory, *output, localcontext.PackOptions{
-		Type: *contextType, Name: *name, IncludeGit: *includeGit, IncludeClaude: *includeClaude,
+		Type: *contextType, Name: *name, IncludeGit: *includeGit,
+		IncludeClaude: *includeClaude, NoIgnore: *noIgnore,
 	})
 	if err != nil {
 		return err
@@ -626,6 +628,9 @@ func packContext(args []string) error {
 	fmt.Printf("Context: %s (type %s)\n", result.Name, result.Type)
 	fmt.Printf("Files: %d (%s)\n", result.Files, formatBytes(result.Bytes))
 	fmt.Printf("Revision: %s\n", result.Revision)
+	if skipped := result.Skipped; skipped != (localcontext.PackSkipped{}) {
+		fmt.Printf("Skipped: %d .git, %d .claude, %d ignored\n", skipped.Git, skipped.Claude, skipped.Ignored)
+	}
 	return nil
 }
 
@@ -1636,10 +1641,14 @@ Options:
 
 Bundle an ordinary directory as a workspace .context file for upload. Files are stored under
 workspace/. Owner-executable files keep mode 0755; other files are stored as 0644. Symbolic links
-and special files are rejected; .git is skipped unless --include-git is set, and .claude is
-skipped unless --include-claude is set (so agent-side settings, skills, and per-run notes do
-not round-trip into the packed workspace). The upload limits (10,000 entries, 256 MiB per
-file, 1 GiB expanded, 256 MiB compressed) are enforced while packing.
+and special files are rejected. The upload limits (10,000 entries, 256 MiB per file, 1 GiB
+expanded, 256 MiB compressed) are enforced while packing, after the filters below.
+
+Filters, all on by default:
+  - .git and .claude files and directories are skipped at any depth.
+  - In a git work tree, files ignored by the .gitignore files and .git/info/exclude are skipped,
+    as git would. The global core.excludesFile is not read. Outside a work tree no rules apply.
+The revision covers only the packed files, so different ignore rules give different revisions.
 
 Options:
   -o, --output FILE      Output file (required)
@@ -1647,7 +1656,8 @@ Options:
   --type TYPE            Context type (default and only supported value: workspace)
   --include-git          Keep .git directories and files
   --include-claude       Keep .claude directories and files
-  --json                 Print JSON
+  --no-ignore            Pack files that .gitignore and .git/info/exclude ignore
+  --json                 Print JSON, including skipped counts {git, claude, ignored}
 
 Example:
   contextctl ctx pack ./demo-repo -o demo-repo.context
