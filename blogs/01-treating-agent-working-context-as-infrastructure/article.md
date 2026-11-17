@@ -6,18 +6,11 @@ That working material often has no clear home. Some of it lives in a project dir
 
 This article explores a straightforward idea: treat agent working context as infrastructure. Give it an identity, store it durably, track where it came from, and manage how agents capture, share, restore, and build on it. Context Service is an open source prototype for exploring that idea.
 
+This is the first of three posts. This one covers the idea and the shape of the service. The [second post](../02-capture-version-and-reuse-agent-context/article.md) is a hands-on tour of the `contextctl` command line, and the [third](../03-delegating-local-agent-work-to-moca/article.md) shows a local agent delegating work to remote agents through [Moca](https://github.com/rossoctl/moca).
+
 ## Agent work is fragmented and temporary
 
-Working context is the durable material an agent uses and creates while completing a task. Depending on the work, it can include:
-
-- agent-harness state needed to continue a session;
-- source files and other workspace content;
-- retrieved evidence and reference material;
-- observations, decisions, and durable memory;
-- knowledge derived from earlier work; and
-- reports, patches, datasets, logs, and other artifacts.
-
-These forms of context are related, but they are not interchangeable. A mutable workspace serves a different purpose from an immutable artifact. Captured session state is not the same as knowledge distilled from many sessions. Yet today each type is often managed by a different tool, if it is managed at all.
+Working context is the durable material an agent uses and creates while completing a task. It is more than a prompt, and more than a memory store.
 
 A directory is a good place to work, but it does not answer several important questions:
 
@@ -31,315 +24,105 @@ A directory is a good place to work, but it does not answer several important qu
 
 Agent frameworks answer some of these questions within their own harness runtime. The result is useful but fragmented. Moving work between frameworks, machines, people, or remote environments can require custom export code and a new storage design each time.
 
-## Working context should be infrastructure
+## Context has five layers
 
-Treating working context as infrastructure moves those concerns into a shared layer. The agent runtime can change. The storage backend can change. The execution environment can change. The context retains its identity and history.
+Context Service uses one umbrella term for the material that long-running agents depend on:
 
-Three connected capabilities are emerging.
+> **Context = Execution + Workspace + Memory + Knowledge + Artifacts**
+
+This is not the context window that large language models use. It is the context that an agentic AI system uses.
+
+- **Execution context** is the active state of an agent: harness state, prompts, tool history, and conversations. It lets an interrupted or restarted agent continue its work.
+- **Workspace context** is where work happens: Git repositories, sandbox filesystems, source files, and other execution assets.
+- **Memory** is durable experience carried beyond one execution or session. It may include observations, decisions, Markdown documents, reports, and other structured records.
+- **Knowledge** is the understanding distilled from memory into reusable forms such as living wikis, documentation, and knowledge bases.
+- **Artifacts** are the outputs of the work: reports, patches, datasets, logs, and build products. A workspace is mutable while an agent works. An artifact is a published, immutable result.
+
+These layers are related but distinct. A workspace is not automatically memory, and a collection of memories is not automatically knowledge. Each layer has different needs for mutability, retention, sharing, and trust, and today each is often managed by a different tool, if it is managed at all.
+
+## Storage is necessary, but it is not context
+
+Keeping the bytes is the foundation. A persistent volume or a bucket makes sure files survive. It does not say what those files mean, who they belong to, or which state is current. Context infrastructure adds five things on top of storage:
+
+- **Ownership:** who owns this context?
+- **Sharing:** who can discover it, read it, write to it, or build on it?
+- **Versioning:** which state is current, and what came before it?
+- **Provenance:** where did this result come from?
+- **Lifecycle:** when does it change, and when does it end?
+
+This is why the framing matters. A team that only has storage still has to build all five for every agent system, and each version looks different.
+
+## Memory as infrastructure: the library analogy
+
+Agent memory is often treated as a capability embedded separately in each agent system. The broader opportunity is to treat memory, and eventually all of context, as shared infrastructure.
+
+A library is a useful analogy:
+
+- memories are the books;
+- Context Service is the library system that manages cataloging, access, provenance, versions, and lifecycle; and
+- the knowledge layer continuously studies the collection and produces higher-level understanding.
+
+Memory captures what happened. Knowledge captures what has been learned. Neither is the library itself. The infrastructure is what lets many agents and people use the same collection without each one building a private shelf.
+
+## Three connected capabilities
+
+Three capabilities follow from treating context this way.
 
 ![Agent work that doesn't disappear: pick up where you left off, see where it came from, and reuse what was learned, shared with any agent or teammate.](images/agent-work-doesnt-disappear.svg)
 
-The first capability captures and moves working data. The second preserves history and relationships. The third turns captured work into reusable memory and knowledge. Sharing and access span all three.
+The first captures and moves working data, so work survives a closed laptop and can resume on another machine or in another agent. The second preserves history and relationships through content-derived revisions, snapshots, clones, and lineage, so every result points back to the exact work that produced it. The third turns captured work into reusable memory and knowledge that the next agent can search. Sharing and access span all three.
 
-![How Context Service works: agents capture into named contexts holding state, revisions, and derived knowledge, which sync, backup, and bundles move to PVC or S3-compatible storage under access grants.](images/context-service-architecture.svg)
+The [next post](../02-capture-version-and-reuse-agent-context/article.md) walks through each of these with the `contextctl` command line.
 
-## Capture and transport working context
+## Context Service is a service
 
-The first job is to give active work a durable home.
+The command line is one way to use Context Service. It is also a server that runs in a Kubernetes cluster, so that platforms and agent runtimes can create and share context without each one managing storage itself.
 
-Context Service can capture native session state from Claude Code, Codex, OpenCode, or Pi. The captured files remain ordinary files in a named local context. The agent harness can continue to work normally while Context Service records updated revisions.
+A caller asks for a named context and describes the storage it needs: a type, a size, and an access mode. Context Service creates a PersistentVolumeClaim from whatever storage class the cluster offers and returns a stable attachment that a runtime can mount:
 
-From there, the context can move without becoming tied to one transport:
+```json
+{
+  "name": "shared-review",
+  "namespace": "team1",
+  "type": "workspace",
+  "storage": {
+    "backend": "pvc",
+    "size": "5Gi",
+    "accessMode": "ReadWriteMany"
+  }
+}
+```
 
-- `sync` explicitly pushes or pulls a verified revision;
-- `backup` continuously copies new local revisions in the background;
-- portable `.context` bundles move as a file or through upload APIs;
-- transfers to PVC-backed storage place context near Kubernetes workloads; and
-- transfers to S3-compatible storage keep an independent durable copy.
+The access mode decides the workspace topology. `ReadWriteOnce` gives one workload a dedicated workspace with independent filesystem state and strong isolation. `ReadWriteMany` lets several Pods mount the same context, so they share one set of files and artifacts. Read-only access is enforced at the consumer's mount, not as a separate volume. The workload picks the topology, and the infrastructure supports both.
 
-Manual synchronization and continuous backup serve different purposes. Synchronization is an intentional point-in-time transfer. Backup observes later captures and asynchronously copies revisions to its configured destination. Both use checksums and content-addressed objects so an interrupted transfer never replaces the last valid revision.
+Context is created at runtime, when a workload asks for it, not fixed when the platform is installed. The same service holds the context's revisions, snapshots, clones, grants, backup, and sync, whichever runtime mounts it.
 
-Transport is not only about disaster recovery. Once working context has a portable form, a user can continue on another machine, restore into another compatible harness, or make the same revision available to a remote execution system.
+## The runtime and the context stay separate
 
-## Preserve history and relationships
+Agents need two kinds of infrastructure, and they change at different speeds. Execution environments, such as sandboxes, scheduling, and routing, are increasingly interchangeable. Durable context is not. It has to outlive any one runtime and move between clusters, machines, and people.
 
-Moving files is useful. Knowing exactly what moved is more useful.
+Context Service draws the line there:
 
-Context Service assigns a content-derived revision to each distinct set of portable content. Repeated capture of unchanged files keeps the same revision. Changed content appends a new revision to the context history.
+| Layer | Responsibility |
+|---|---|
+| Context Service | Context identity, PVC lifecycle, revisions, snapshots, clones, access, backup, and sync |
+| Kubernetes and the storage driver | Volume provisioning, attachment, and mount enforcement |
+| The runtime, such as [Moca](https://github.com/rossoctl/moca) | Execution environments, routing, leases, and execution |
+| The agent workload | Declares what it needs and does the work; does not create infrastructure |
 
-Snapshots preserve important points in that history. Writable clones create independent branches for experiments or competing approaches. Restore protects the current state with a safety snapshot before replacing it, which prevents recovery from silently destroying later work.
+[Moca](https://github.com/rossoctl/moca) is one such runtime. It is the workload-facing control plane that creates and selects the sandboxes where agents run. [Moca](https://github.com/rossoctl/moca) owns sandbox creation, routing, and release. Context Service owns the context those sandboxes mount. Deleting a sandbox never deletes its context, and Context Service never deletes a context that still has consumers unless forced.
 
-Lineage and provenance connect those revisions. When an agent derives memory, knowledge, or an artifact, the resulting context records the exact source context and revision. If the source changes later, the earlier result still explains what produced it.
+This boundary came from the first implementation. The project began with one concrete problem: creating sandbox compute with durable workspace storage for [Moca](https://github.com/rossoctl/moca). An early version of Context Service created the sandboxes itself. Once runtimes began creating their own execution environments, that part moved out, and Context Service kept the storage and context. The result is a smaller service with a clearer job.
 
-This makes several questions answerable:
+In the same spirit, [Moca](https://github.com/rossoctl/moca) builds its own workload API on top of Context Service. A workload bundles a frozen context revision with the sandboxes that run tasks against it, and a workload can get sandboxes and a mounted volume of its own. The third post covers that in detail. The pattern is the point: the runtime owns execution, Context Service owns context, and the two meet when a sandbox mounts durable context.
 
-- Which captured session produced this memory?
-- Is the remote copy current or stale?
-- What revision did this report use?
-- Which agent or process produced it?
-- Which consumers are attached to this context now?
-
-The `contextctl ctx graph` command combines these relationships into one view of sources, derivatives, active consumers, and storage copies. The graph turns a collection of directories into an inspectable history of work.
-
-## Derive reusable memory and knowledge
-
-Captured state is valuable for continuation, but replaying an entire session is not always the best way to reuse earlier work.
-
-Context Service treats memory and knowledge as derived forms of context:
-
-- A **memory context** extracts stable facts, decisions, preferences, workflows, and unresolved work from captured session state.
-- A **knowledge context** compiles selected state and memory into a structured, interlinked collection of attributed records that is kept current as new material arrives.
-
-The distinction matters. Memory preserves what should carry forward from an experience. Knowledge organizes material so another agent or person can retrieve only what is relevant.
-
-Generation runs as an independent agent process and does not modify the captured source. The derived context records its generator and exact source revision. Its output remains inspectable Markdown, JSON, JSONL, and text rather than an opaque runtime store.
-
-The initial knowledge search is deliberately simple and deterministic. Query results report their source context, revision, and file. A later vector or hybrid search implementation can improve retrieval without changing the contract presented to agents and applications.
-
-This progression creates a useful feedback loop:
-
-1. An agent performs work and leaves captured state.
-2. Stable experience becomes durable memory.
-3. Memory and selected source material become searchable knowledge.
-4. Later agents retrieve attributed results and produce new work.
-
-The source remains available when deeper inspection is necessary. Derived material does not erase its history.
-
-## Share context across sessions, agents, and users
+## Sharing needs ownership
 
 Sharing is not a separate final stage. It applies across capture, history, and derivation.
 
 One person might restore captured state into a later Claude Code session. Another might move the same project from Claude Code to Codex. Several agents might start from writable clones of one revision. A team might publish an immutable artifact while retaining the workspace and evidence that produced it.
 
-In a shared cluster, the problem also becomes one of ownership. A context needs an identity independent of its storage path. Explicit grants control who can discover, read, write, attach, derive from, or administer it. Unauthorized lookups do not reveal that the context exists.
-
-The execution platform still owns processes, sandboxes, and scheduling. Context Service owns context identity, history, access, and storage lifecycle. Keeping that boundary clear lets different agent and execution systems use the same context infrastructure without turning Context Service into another runtime.
-
-## Tutorial: Try It Locally
-
-You can explore all three capabilities without Kubernetes or a running Context Service API. The local CLI stores everything under `~/.contexts` by default.
-
-Install `contextctl`:
-
-```console
-$ curl -fsSL https://raw.githubusercontent.com/rossoctl/context-service/main/install.sh | sh
-```
-
-### 1. Capture an agent session
-
-From a project directory, create a local state context and attach Claude Code:
-
-```console
-$ contextctl ctx create demo --type state --backend filesystem
-
-$ contextctl ctx attach demo --harness claude
-```
-
-Next, launch Claude Code from the same project directory and ask it to remember a project decision:
-
-```console
-$ claude
-```
-
-```text
-❯ Remember that the project code word is violet telescope.
-```
-
-Wait for its response, then either keep chatting or exit with `/exit`. Context Service captures the native session state automatically. Capture is not a one-time event: each completed turn records a new revision of the session under `~/.contexts`. This capture uses the hooks that `claude`, `codex`, `opencode`, and `pi` each provide.
-
-Inspect the result:
-
-```console
-$ contextctl ctx get demo --backend filesystem
-demo  ready · state · filesystem
-└── path  /Users/daniel/.contexts/demo
-    └── revision  4b0819b4b09d
-    └── Claude  1 sessions · 145.8 KiB
-    └── attached to Claude  /Users/daniel/projects/agent-notes
-```
-
-The first line shows the context's name, status, type, and storage backend. The lines below show its path, current revision, the number and size of captured Claude Code sessions, and the project it is attached to.
-
-```console
-$ contextctl ctx revisions demo
-REVISIONS (2)
-4b0819b4b09d  capture · claude · 2026-11-17T17:39:48Z · current
-891b59183f30  capture · claude · 2026-11-17T17:39:48Z
-```
-
-The single prompt produced two revisions: one when the response completed and one when the session ended. Each revision ID is derived from a hash of the captured content, so unchanged state does not add a duplicate entry.
-
-Now that the session is captured, you can do more with it than inspect it. A captured context is a verified, portable unit, so you can copy it, upload it to a PVC, or keep it backed up as it changes.
-
-Copy a context by exporting it as a portable bundle and importing it under a new name:
-
-```console
-$ contextctl ctx export demo
-Exported demo to /Users/daniel/projects/agent-notes/demo.context
-Files: 3 (147.3 KiB)
-
-$ contextctl ctx import demo.context --name demo-copy
-Imported demo-copy from /Users/daniel/projects/agent-notes/demo.context
-demo-copy  ready · state · filesystem
-└── path  /Users/daniel/.contexts/demo-copy
-    └── revision  4b0819b4b09d
-    └── Claude  1 sessions · 145.8 KiB
-```
-
-The bundle is a checksummed file that carries the session, its revision history, and its provenance. Import verifies it and never overwrites an existing context, so the same file can move your work to another machine or fork it locally.
-
-Upload a context to a PVC with `sync`. Create a PVC-backed context, then push the local one into it:
-
-```console
-$ contextctl ctx create cloud-demo --type state
-
-$ contextctl ctx list
-CONTEXTS
-
-FILESYSTEM (1)
-demo  Ready · state
-└── path  /Users/daniel/.contexts/demo
-    └── Claude  1 sessions · 145.8 KiB
-    └── attached to Claude  /Users/daniel/projects/agent-notes
-
-PVC (1)
-cloud-demo  Ready · state
-└── pvc/context-cloud-demo  1Gi RWO · standard · namespace context-service
-
-$ contextctl ctx sync push demo --remote-name cloud-demo
-Uploading   100%  31.4 KiB / 31.4 KiB  31.4 KiB/s  00:01
-Synced demo to pvc/context-cloud-demo in namespace context-service
-Files: 3 (147.3 KiB)
-```
-
-`sync push` streams the bundle through Kubernetes and verifies its checksum before publishing the revision. The captured session ends up on storage next to your Kubernetes workloads, without a manual copy.
-
-Next, say you want to back up the context, for example to S3, so a lost laptop or a deleted directory doesn't take your agent's work with it. Backup is continuous. Configure one remote destination and a worker keeps it current in the background, with nothing to rerun after each session:
-
-```console
-$ contextctl ctx backup start demo --to s3://daniel-agent-contexts/demo
-Backup started for demo → s3://daniel-agent-contexts/demo
-Every 5m0s · pid 48213
-
-$ contextctl ctx backup status demo
-demo  Running · every 5m0s
-└── s3://daniel-agent-contexts/demo
-    last attempt  2026-11-17T10:39:50-07:00
-    last success  2026-11-17T10:39:51-07:00 · 2 files · 145.8 KiB
-    revision      4b0819b4b09d2a97516c354b68848cdbd8f54a226a0a55b21ed138e207ad6c5c
-    log           /Users/daniel/.contexts/demo/.backup/backup.log
-```
-
-`backup start` launches a detached `contextctl ctx backup run` process that keeps running after your terminal closes. Each Claude Code capture hook signals the worker, which waits two seconds for activity to settle and then uploads the new revision. The worker also runs on a periodic interval and skips the upload when the revision has not changed. A failed transfer leaves the last verified copy in place and retries with backoff, so the destination always holds a valid revision.
-
-An S3-compatible destination uses your normal S3 credentials. A PVC target, such as `pvc://context-service/cloud-demo`, works the same way.
-
-### 2. Preserve and inspect its history
-
-Because the session is captured as a context, you can snapshot it and clone it. Create a snapshot and a writable branch:
-
-```console
-$ contextctl ctx snapshot create demo baseline
-baseline  ready · 4b0819b4b09d · 145.8 KiB
-
-$ contextctl ctx snapshot clone demo@baseline experiment
-experiment  ready · state · filesystem
-└── path  /Users/daniel/.contexts/experiment
-    └── revision  4b0819b4b09d
-    └── source  demo@4b0819b4b09d · snapshot-clone
-    └── Claude  1 sessions · 145.8 KiB
-```
-
-The snapshot freezes an exact revision of the session. The clone is a new writable context that records the revision it came from, so you can take the work in a different direction without touching `demo`.
-
-```console
-$ contextctl ctx graph
-CONTEXT GRAPH (2)
-demo  state · filesystem · Ready · 4b0819b4b09d
-├── location  /Users/daniel/.contexts/demo
-├── derives  experiment@4b0819b4b09d · state · filesystem · ready
-├── consumer  harness/Claude · /Users/daniel/projects/agent-notes · attached
-├── copy  pvc/context-cloud-demo · namespace context-service · 4b0819b4b09d · ready
-└── copy  s3://daniel-agent-contexts/demo · ready
-
-experiment  state · filesystem · Ready · 4b0819b4b09d
-├── location  /Users/daniel/.contexts/experiment
-└── source  demo@4b0819b4b09d · state · filesystem · ready
-```
-
-The graph shows each context with its sources, derivatives, attached harness, and remote copies. Clones appear under the exact revision they came from, so the history of your work reads as a version tree you can inspect.
-
-### 3. Generate memory and knowledge
-
-Derive durable memory from the captured session:
-
-```console
-$ contextctl ctx derive memory demo --name demo-memory --agent claude
-Generated demo-memory from demo@4b0819b4b09d
-Memory: /Users/daniel/.contexts/demo-memory/memory/MEMORY.md
-Generator: claude
-
-$ contextctl ctx lineage demo-memory
-LINEAGE · demo-memory
-d27a91c05e3b  derive · claude
-└── demo@4b0819b4b09d  state · available
-```
-
-The memory is generated from the captured session, not written by hand, and its lineage names the exact revision of `demo` it was derived from. Capturing the session first is what makes this possible.
-
-Build searchable knowledge from both the original state and the derived memory:
-
-```console
-$ contextctl ctx derive knowledge \
-  --name demo-knowledge \
-  --from demo \
-  --from demo-memory \
-  --agent claude
-Generated demo-knowledge from 2 contexts
-Records: 4 (0 reused)
-Knowledge: /Users/daniel/.contexts/demo-knowledge/knowledge
-
-$ contextctl ctx search demo-knowledge "violet telescope"
-RESULTS (2)
-1. Project code word
-   The project code word is "violet telescope".
-   source  demo-memory@d27a91c05e3b · memory/MEMORY.md
-
-2. Project code word
-   The user asked Claude to remember that the project code word is violet telescope.
-   source  demo@4b0819b4b09d · harnesses/claude/project/3f6c9e1a-52d7-4b08-9a41-c7e0d2b85f13.jsonl
-```
-
-This is the powerful step. Several pieces of context, here a raw session and the memory derived from it, combine into a single knowledge tree. Every result reports the context, revision, and file it came from.
-
-```console
-$ contextctl ctx graph
-CONTEXT GRAPH (4)
-demo  state · filesystem · Ready · 4b0819b4b09d
-├── location  /Users/daniel/.contexts/demo
-├── derives  demo-knowledge@7f3c28b6e1a4 · knowledge · filesystem · ready
-├── derives  demo-memory@d27a91c05e3b · memory · filesystem · ready
-├── derives  experiment@4b0819b4b09d · state · filesystem · ready
-├── consumer  harness/Claude · /Users/daniel/projects/agent-notes · attached
-├── copy  pvc/context-cloud-demo · namespace context-service · 4b0819b4b09d · ready
-└── copy  s3://daniel-agent-contexts/demo · ready
-
-demo-knowledge  knowledge · filesystem · Ready · 7f3c28b6e1a4
-├── location  /Users/daniel/.contexts/demo-knowledge
-├── source  demo@4b0819b4b09d · state · filesystem · ready
-└── source  demo-memory@d27a91c05e3b · memory · filesystem · ready
-
-demo-memory  memory · filesystem · Ready · d27a91c05e3b
-├── location  /Users/daniel/.contexts/demo-memory
-├── source  demo@4b0819b4b09d · state · filesystem · ready
-└── derives  demo-knowledge@7f3c28b6e1a4 · knowledge · filesystem · ready
-
-experiment  state · filesystem · Ready · 4b0819b4b09d
-├── location  /Users/daniel/.contexts/experiment
-└── source  demo@4b0819b4b09d · state · filesystem · ready
-```
-
-The final graph shows the captured state, its durable memory, the knowledge derived from both, and the exact revisions connecting them.
+In a shared cluster, the problem also becomes one of ownership. A context needs an identity independent of its storage path. Explicit grants control who can discover, read, write, attach, derive from, or administer it. Unauthorized lookups do not reveal that the context exists. Context Service authorizes the identity supplied by an authenticating gateway and does not validate credentials itself.
 
 ## The difficult parts are boundaries, not storage
 
@@ -353,7 +136,7 @@ Implementation work has reinforced several design rules:
 - Checksums are verified before a new revision becomes current.
 - Source references are immutable provenance.
 - Restore protects newer work before replacing it.
-- Agent code does not receive infrastructure credentials.
+- Agent code does not receive infrastructure credentials or Kubernetes resources.
 - Access is checked before context is discovered or attached.
 - Context can outlive any one process or execution environment.
 
@@ -371,8 +154,7 @@ Context Service is still an early prototype, and its API is evolving. The open q
 
 - [Context Service on GitHub](https://github.com/rossoctl/context-service)
 - [Context Service vision](https://github.com/rossoctl/context-service/blob/main/VISION.md)
-- [Capture local agent state](https://github.com/rossoctl/context-service/tree/main/demos/local/harness-capture)
-- [Explore context lineage](https://github.com/rossoctl/context-service/tree/main/demos/local/context-lineage)
-- [Try Context Service on Kind](https://github.com/rossoctl/context-service/tree/main/demos/kind)
+- [Moca integration](https://github.com/rossoctl/context-service/blob/main/docs/moca.md)
+- Next: [Capture, version, and reuse agent context with contextctl](../02-capture-version-and-reuse-agent-context/article.md)
 
 _This post was written with assistance from an AI agent._
