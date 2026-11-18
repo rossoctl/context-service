@@ -81,19 +81,18 @@ mocactl workloads create \
   --mount read-only
 ```
 
-[Moca](https://github.com/rossoctl/moca) then:
+[Moca](https://github.com/rossoctl/moca) does the work through its trusted provisioner, `moca-provisioner`. The provisioner owns the workload's execution resources and mounted volume, and it is the only [Moca](https://github.com/rossoctl/moca) component allowed to create workload resources in the sandbox namespace. [Moca](https://github.com/rossoctl/moca) then:
 
 1. authenticates the caller and creates the workload record;
 2. freezes the Context Service revision uploaded for that workload;
-3. asks its trusted provisioner to create the workload's sandbox pods and volume;
-4. seeds the volume from the frozen context revision;
-5. issues a signed attach token that binds the sandboxes to the workload and owner;
-6. routes workload tasks only to sandboxes with that verified binding; and
-7. deletes the sandboxes and volume before deleting the Context.
+3. asks the provisioner to create the workload's sandbox pods, the volume, and a Secret that holds a signed attach token binding the sandboxes to the workload and owner;
+4. seeds the volume from the frozen context revision, using the init containers of the workload's first pod;
+5. routes workload tasks only to sandboxes that attach with a verified token; and
+6. deletes the sandboxes and volume before deleting the Context.
 
-Context Service does not create the sandboxes. It supplies the frozen source revision, exactly as it does in Phase 1. [Moca](https://github.com/rossoctl/moca)'s `moca-provisioner` owns the workload's execution resources and mounted volume. It is the only [Moca](https://github.com/rossoctl/moca) component allowed to create workload resources in the sandbox namespace.
+Context Service does not create the sandboxes. It supplies the frozen source revision, exactly as it does in Phase 1.
 
-That separation keeps model-influenced workers away from Kubernetes credentials. The provisioner has namespace-scoped permissions and cannot read Secrets, and an admission policy limits the pods it creates. The control plane, supervisor, relay, and sandboxes cannot create Pods or PersistentVolumeClaims.
+That separation keeps model-influenced workers away from Kubernetes credentials. The provisioner has namespace-scoped permissions. It can create, update, and delete the Secrets that hold attach tokens, but it can't read any Secret. An admission policy limits what it creates, including the pod template of each workload's StatefulSet. The rest of [Moca](https://github.com/rossoctl/moca) can't create Pods or PersistentVolumeClaims.
 
 ### Read-only and writable mounted workspaces
 
@@ -101,7 +100,7 @@ A read-only mount gives every sandbox in the workload the same immutable startin
 
 A writable mount creates a shared working tree that persists across tasks for the lifetime of the workload. This supports a sequence in which one task makes a change and a later task tests or reviews it. Concurrent writers are unsafe because [Moca](https://github.com/rossoctl/moca) does not add file-level locking, so the skill runs dependent writing tasks in sequence.
 
-The volume's access mode follows the storage class. By default the claim is `ReadWriteOnce`, and [Moca](https://github.com/rossoctl/moca) schedules all of the workload's sandboxes onto one node so they can mount it. A storage class that the operator marks as supporting `ReadWriteMany` lets the sandboxes spread across nodes. The workload chooses the topology it needs, and the operator decides which storage classes are allowed.
+The volume's access mode follows the storage class. By default the claim is `ReadWriteOnce`, and [Moca](https://github.com/rossoctl/moca) schedules all of the workload's sandboxes onto one node so they can mount it. A storage class that the operator marks as supporting `ReadWriteMany` lets the sandboxes spread across nodes. A workload picks its storage class through the API's `workspace.storageClass` field, and the operator decides which storage classes are allowed. `mocactl` doesn't have a flag for it.
 
 The mounted workspace is still temporary infrastructure. It never changes the user's local tree automatically. The agent must return the relevant patch, report, or other output for local review.
 
@@ -112,7 +111,7 @@ The Phase 2 Kind demonstration uses two independent identities and two small rep
 - Alice requests two sandboxes with a writable mount.
 - Bob requests one sandbox with a read-only mount.
 - Each user runs tasks only on their own workload.
-- Bob receives `404` when he tries to read, run against, or delete Alice's workload.
+- Bob receives `404` when he tries to read Alice's workload, and his attempts to run a task on it or delete it fail.
 - Neither task can find the other user's marker files.
 - Alice writes a file in one task and reads it from both of her sandboxes later.
 - Bob's attempted write fails.
