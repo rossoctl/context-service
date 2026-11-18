@@ -1,5 +1,7 @@
 # Delegating local agent work to Moca
 
+_Who this is for: developers who want to hand work from a local agent to remote agents (Phase 1), and operators who run the shared service for several users (Phase 2). Some Kubernetes background helps with Phase 2._
+
 The [previous post](../02-capture-version-and-reuse-agent-context/article.md) used `contextctl` to capture an agent session as a named context, move it, and derive memory and knowledge from it. This post puts the same machinery to work on a different problem: handing part of a local agent's job to remote agents. The [first post](../01-treating-agent-working-context-as-infrastructure/article.md) explains why working context deserves its own infrastructure layer, and why that layer stays separate from the runtime that executes agents. Delegation shows that boundary in practice.
 
 A local coding agent has an unusual advantage: it already understands the work in progress. It can inspect the repository, follow the conversation, identify the relevant files, and turn a broad request into smaller tasks.

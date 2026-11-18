@@ -1,5 +1,7 @@
 # Capture, version, and reuse agent context with contextctl
 
+_Who this is for: developers who want to try `contextctl` on their own machine. The tutorial runs locally, and one optional step uses a Kubernetes cluster._
+
 The [previous post](../01-treating-agent-working-context-as-infrastructure/article.md) argued that agent working context should be treated as infrastructure: a shared layer with identity, history, access control, and a lifecycle that outlives any one agent or process. This post is the hands-on companion. It uses `contextctl`, the Context Service command-line tool, to capture a Claude Code session into a named context, move and back it up, snapshot and clone it, and derive memory and knowledge from it.
 
 Most of the steps run entirely on your machine, with context stored under `~/.contexts`. The step that uploads to a PVC needs a Kubernetes cluster running Context Service.
