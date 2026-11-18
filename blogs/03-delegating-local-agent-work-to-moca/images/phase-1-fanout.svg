@@ -51,22 +51,14 @@
   <text x="1048" y="313" text-anchor="middle" class="body">Shared sandbox pool</text>
 
   <path d="M 275 190 H 335" fill="none" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
-  <circle cx="299" cy="190" r="13" fill="#7c3aed"/>
-  <text x="299" y="195" text-anchor="middle" class="step">1</text>
   <text x="305" y="169" text-anchor="middle" class="arrow-label">pack + upload</text>
 
   <path d="M 580 190 H 640" fill="none" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
-  <circle cx="604" cy="190" r="13" fill="#d97706"/>
-  <text x="604" y="195" text-anchor="middle" class="step">2</text>
   <text x="610" y="169" text-anchor="middle" class="arrow-label">frozen revision</text>
 
   <path d="M 865 190 H 925" fill="none" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
-  <circle cx="889" cy="190" r="13" fill="#2563eb"/>
-  <text x="889" y="195" text-anchor="middle" class="step">3</text>
   <text x="895" y="169" text-anchor="middle" class="arrow-label">fan out</text>
 
   <path d="M 1038 336 C 905 403, 350 404, 168 322" fill="none" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow)"/>
-  <circle cx="610" cy="383" r="13" fill="#16a34a"/>
-  <text x="610" y="388" text-anchor="middle" class="step">4</text>
   <text x="610" y="364" text-anchor="middle" class="arrow-label">collect results</text>
 </svg>

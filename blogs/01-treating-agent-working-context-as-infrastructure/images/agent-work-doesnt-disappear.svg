@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="470" viewBox="0 0 1200 470" role="img" aria-labelledby="title desc">
   <title id="title">Agent work that doesn't disappear</title>
-  <desc id="desc">Three stages: pick up where you left off, see where everything came from, and reuse what was learned, followed by one example rule through each stage. A bar underneath says the work can be shared with any agent or teammate.</desc>
+  <desc id="desc">Three capabilities: pick up where you left off, see where everything came from, and reuse what was learned, each with the same example: a project code word, "violet telescope". A bar underneath says the work can be shared with any agent or teammate.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/></marker>
     <filter id="shadow" x="-10%" y="-15%" width="120%" height="140%"><feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.12"/></filter>
@@ -26,8 +26,8 @@
     <text x="200" y="187" text-anchor="middle" class="body">Resume on another machine or agent.</text>
     <rect x="65" y="225" width="270" height="90" rx="12" fill="#ffffff" stroke="#c4b5fd"/>
     <text x="200" y="250" text-anchor="middle" class="tag">EXAMPLE</text>
-    <text x="200" y="275" text-anchor="middle" class="ex">Claude learns: write dates</text>
-    <text x="200" y="295" text-anchor="middle" class="ex">like November 4, 2026</text>
+    <text x="200" y="275" text-anchor="middle" class="ex">Claude is told the project</text>
+    <text x="200" y="295" text-anchor="middle" class="ex">code word is violet telescope</text>
   </g>
   <g>
     <rect x="445" y="85" width="310" height="250" rx="17" fill="#fef3c7" stroke="#d97706" stroke-width="2.5" filter="url(#shadow)"/>
@@ -37,8 +37,8 @@
     <text x="600" y="187" text-anchor="middle" class="body">exact work that produced it.</text>
     <rect x="465" y="225" width="270" height="90" rx="12" fill="#ffffff" stroke="#fcd34d"/>
     <text x="600" y="250" text-anchor="middle" class="tag">EXAMPLE</text>
-    <text x="600" y="275" text-anchor="middle" class="ex">The rule is saved in</text>
-    <text x="600" y="295" text-anchor="middle" class="ex">revision a826f79c</text>
+    <text x="600" y="275" text-anchor="middle" class="ex">The session is saved in</text>
+    <text x="600" y="295" text-anchor="middle" class="ex">revision 4b0819b4b09d</text>
   </g>
   <g>
     <rect x="845" y="85" width="310" height="250" rx="17" fill="#dcfce7" stroke="#16a34a" stroke-width="2.5" filter="url(#shadow)"/>
@@ -49,13 +49,8 @@
     <rect x="865" y="225" width="270" height="90" rx="12" fill="#ffffff" stroke="#86efac"/>
     <text x="1000" y="250" text-anchor="middle" class="tag">EXAMPLE</text>
     <text x="1000" y="275" text-anchor="middle" class="ex">A later agent searches</text>
-    <text x="1000" y="295" text-anchor="middle" class="ex">"project decision" and finds it</text>
+    <text x="1000" y="295" text-anchor="middle" class="ex">"violet telescope" and finds it</text>
   </g>
-  <path d="M 355 210 H 440" fill="none" stroke="#475569" stroke-width="3" marker-end="url(#arrow)"/>
-  <path d="M 755 210 H 840" fill="none" stroke="#475569" stroke-width="3" marker-end="url(#arrow)"/>
-  <path d="M 200 335 V 370" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
-  <path d="M 600 335 V 370" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
-  <path d="M 1000 335 V 370" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
   <rect x="145" y="375" width="910" height="54" rx="27" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
   <text x="600" y="408" text-anchor="middle" class="rail">Share it with any agent or teammate</text>
 </svg>

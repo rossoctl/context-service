@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
   <title id="title">How Context Service works</title>
-  <desc id="desc">Agent harnesses are captured into a local context store holding state, revisions, and derived memory and knowledge. Sync, continuous backup, and portable bundles move that context to PVC storage on Kubernetes or S3-compatible storage. Access grants control sharing across all of it.</desc>
+  <desc id="desc">Agent harnesses are captured into a local context store holding state, revisions, and derived memory and knowledge. Sync, continuous backup, and portable bundles move that context to PVC storage on Kubernetes or S3-compatible storage. Access grants control sharing across all of it. Numbers 1, 2, and 3 match the three capabilities: capture and transport, history, and derived memory and knowledge.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/></marker>
     <filter id="shadow" x="-10%" y="-15%" width="120%" height="140%"><feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.12"/></filter>
@@ -13,6 +13,7 @@
       .chip { font-size: 14px; fill: #0f172a; }
       .mono { font-family: Menlo, Consolas, monospace; font-size: 13px; fill: #334155; }
       .label { font-weight: 650; font-size: 14px; fill: #334155; }
+      .num { font-weight: 700; font-size: 13px; fill: #ffffff; }
       .rail { font-weight: 650; font-size: 17px; fill: #172554; }
     </style>
   </defs>
@@ -54,12 +55,19 @@
   <text x="755" y="264" text-anchor="middle" class="body">searchable</text>
   <text x="755" y="286" text-anchor="middle" class="body">knowledge</text>
 
+  <circle cx="390" cy="198" r="11" fill="#7c3aed"/><text x="390" y="203" text-anchor="middle" class="num">1</text>
+  <circle cx="543" cy="198" r="11" fill="#d97706"/><text x="543" y="203" text-anchor="middle" class="num">2</text>
+  <circle cx="700" cy="198" r="11" fill="#16a34a"/><text x="700" y="203" text-anchor="middle" class="num">3</text>
+  <circle cx="295" cy="229" r="11" fill="#7c3aed"/><text x="295" y="234" text-anchor="middle" class="num">1</text>
+
   <!-- transport -->
   <path d="M 855 224 H 945" stroke="#475569" stroke-width="3" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
   <text x="900" y="186" text-anchor="middle" class="label">sync</text>
   <text x="900" y="206" text-anchor="middle" class="label">backup</text>
   <text x="900" y="252" text-anchor="middle" class="label">.context</text>
   <text x="900" y="270" text-anchor="middle" class="label">bundles</text>
+
+  <circle cx="900" cy="229" r="11" fill="#7c3aed"/><text x="900" y="234" text-anchor="middle" class="num">1</text>
 
   <!-- storage -->
   <rect x="950" y="110" width="200" height="104" rx="16" fill="#e0f2fe" stroke="#0284c7" stroke-width="2"/>
@@ -73,6 +81,5 @@
 
   <!-- sharing -->
   <rect x="60" y="390" width="1090" height="56" rx="28" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
-  <text x="605" y="424" text-anchor="middle" class="rail">Access grants decide who can read, write, attach, or derive from each context</text>
-  <path d="M 600 340 V 385" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="605" y="424" text-anchor="middle" class="rail">In a shared cluster, access grants decide who can read, write, attach, or derive from each context</text>
 </svg>
