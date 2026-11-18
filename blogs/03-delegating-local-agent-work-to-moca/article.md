@@ -27,7 +27,7 @@ Delegation is more than sending a prompt to a remote API. A useful workflow must
 - how results return to the local user; and
 - what gets deleted afterward.
 
-The skill encodes those decisions as instructions for Claude Code, Codex, or another compatible agent harness. It uses two command-line tools:
+The skill encodes those decisions as instructions for Claude Code, Codex, OpenCode, or another compatible agent harness. It uses two command-line tools:
 
 - `contextctl` selects and packs a directory into a verified `.context` bundle;
 - `mocactl` creates the [Moca](https://github.com/rossoctl/moca) workload, starts subagent tasks, monitors them, retrieves their results, and deletes the workload.
@@ -50,7 +50,7 @@ The flow is deliberately small:
 6. The local agent spawns one bounded task per prompt.
 7. [Moca](https://github.com/rossoctl/moca) distributes the tasks across its available sandboxes.
 8. The local agent collects and checks each result.
-9. The workload and local bundle are deleted.
+9. The workload and local bundle are deleted. If the agent skips this step, the workload keeps running, and `mocactl workloads list` shows the ones you still have.
 
 The important scaling property is that the context moves once. One task can use it, or many independent tasks, a hundred for example, can share the same verified starting point. A codebase might be reviewed one package at a time. A collection of incident reports might be analyzed one report at a time. A migration assessment might assign one service to each subagent.
 
@@ -105,9 +105,9 @@ The volume's access mode follows the storage class. By default the claim is `Rea
 
 The mounted workspace is still temporary infrastructure. It never changes the user's local tree automatically. The agent must return the relevant patch, report, or other output for local review.
 
-## What the two-user demonstration proves
+## What the two-user demo checks
 
-The Phase 2 Kind demonstration uses two independent identities and two small repositories:
+The [two-user demo](https://github.com/rossoctl/moca/tree/main/skills/moca-delegate-task/demo-two-users) runs on Kind with two independent identities and two small repositories:
 
 - Alice requests two sandboxes with a writable mount.
 - Bob requests one sandbox with a read-only mount.
@@ -124,9 +124,9 @@ This is more than a happy-path demo. It tests the identity and routing boundarie
 
 ## Try both phases on Kind
 
-Both demonstrations run on local Kind clusters and use a scripted model, so they do not require a model API key. They bind persistent local ports instead of requiring port-forwarding and restore the user's previous Kubernetes context when setup exits.
+Both demos run on local Kind clusters and use a scripted model, so they do not require a model API key. They bind persistent local ports instead of requiring port-forwarding and restore the user's previous Kubernetes context when setup exits.
 
-Clone [Moca](https://github.com/rossoctl/moca) and install its dependencies first. Then run the Phase 1 demonstration:
+Clone [Moca](https://github.com/rossoctl/moca) and install its dependencies first. Then run the Phase 1 demo:
 
 ```sh
 skills/moca-delegate-task/demo/setup.sh --build
@@ -136,7 +136,7 @@ skills/moca-delegate-task/demo/setup.sh --delete
 
 The checked-in demo keeps the flow small: it uploads one example repository and runs one read-only task and one writable task. The same workload and `mocactl spawn` interface support a larger fan-out.
 
-Run the two-user Phase 2 demonstration separately:
+Run the two-user demo separately:
 
 ```sh
 skills/moca-delegate-task/demo-two-users/setup.sh --build
@@ -144,7 +144,7 @@ skills/moca-delegate-task/demo-two-users/run.sh
 skills/moca-delegate-task/demo-two-users/setup.sh --delete
 ```
 
-The second script prints a PASS or FAIL result for each isolation and lifecycle check. It uses separate local login state and different host ports, so it does not overwrite a developer's normal `mocactl` login.
+The two-user script runs the checks described above and prints a PASS or FAIL result for each isolation and lifecycle check. It uses separate local login state and different host ports, so it does not overwrite a developer's normal `mocactl` login.
 
 ## Next steps
 
@@ -161,7 +161,7 @@ Those questions point to the next workloads worth exploring:
 
 Each of these needs the same answers: who owns the context, who may use it, and how the system shows provenance when people and agents continue one another's work. The [context workflows](https://github.com/rossoctl/moca/blob/main/docs/concepts/context-workflows.md#workflows) in the Moca docs list more of these workloads.
 
-Those questions connect delegation back to the idea in the [first post](../01-treating-agent-working-context-as-infrastructure/article.md). Remote execution is one consumer of context. Durable, versioned, shareable working context is the foundation that lets it become more than a remote prompt API.
+Those questions connect delegation back to the [first post](../01-treating-agent-working-context-as-infrastructure/article.md)'s case for treating working context as infrastructure. Remote execution is one consumer of context. Durable, versioned, shareable working context is the foundation that lets it become more than a remote prompt API.
 
 ## Learn more
 
@@ -170,6 +170,8 @@ Those questions connect delegation back to the idea in the [first post](../01-tr
 - [The `moca-delegate-task` skill](https://github.com/rossoctl/moca/tree/main/skills/moca-delegate-task)
 - [Phase 1 Kind demo](https://github.com/rossoctl/moca/tree/main/skills/moca-delegate-task/demo)
 - [Phase 2 two-user demo](https://github.com/rossoctl/moca/tree/main/skills/moca-delegate-task/demo-two-users)
+- [A delegation demo with a real model in Claude Code or OpenCode](https://github.com/rossoctl/state-lab/tree/main/docs/demos/subagents/moca-delegated)
+- [How Moca uses Context Service](https://github.com/rossoctl/moca/blob/main/docs/context-service.md)
 - Previous: [Capture, version, and reuse agent context with contextctl](../02-capture-version-and-reuse-agent-context/article.md)
 
 _This post was written with assistance from an AI agent._
