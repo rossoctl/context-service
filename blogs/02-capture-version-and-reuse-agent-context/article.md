@@ -34,7 +34,7 @@ Moving files is useful. Knowing exactly what moved is more useful.
 
 Context Service assigns a content-derived revision to each distinct set of portable content. Repeated capture of unchanged files keeps the same revision. Changed content appends a new revision to the context history.
 
-Snapshots preserve important points in that history. Writable clones create independent branches for experiments or competing approaches. Before a local restore overwrites the current files, it saves them as a safety snapshot you can go back to, so recovery never silently destroys later work.
+Snapshots preserve important points in that history: a snapshot is a named, immutable copy of one revision, kept under its own retention rules. A clone is a new, writable context created from a snapshot, which makes it an independent branch for experiments or competing approaches. Before a local restore overwrites the current files, it saves them as a safety snapshot you can go back to, so recovery never silently destroys later work.
 
 Lineage and provenance connect those revisions. When an agent derives memory, knowledge, or an artifact, the resulting context records the exact source context and revision. If the source changes later, the earlier result still explains what produced it.
 
@@ -59,7 +59,7 @@ Context Service treats memory and knowledge as derived forms of context:
 
 The distinction matters. Memory preserves what should carry forward from an experience. Knowledge organizes material so another agent or person can retrieve only what is relevant.
 
-Generation runs as an independent agent process and does not modify the captured source. The derived context records its generator and exact source revision. Its output remains inspectable Markdown, JSON, JSONL, and text rather than an opaque runtime store.
+Generation runs your local `claude` or `codex` command-line tool once, non-interactively, in an empty temporary directory. Context Service sends it a prompt plus the source content and saves the text that comes back, so it uses your agent CLI and model and costs model usage. Only `claude` and `codex` can generate, even though capture works with all four harnesses. Generation does not modify the captured source. The derived context records its generator and exact source revision. Its output remains inspectable Markdown, JSON, JSONL, and text rather than an opaque runtime store.
 
 The initial knowledge search is deliberately simple and deterministic. Query results report their source context, revision, and file. A later vector or hybrid search implementation can improve retrieval without changing the contract presented to agents and applications.
 
@@ -113,6 +113,8 @@ $ claude
 ```
 
 Wait for its response, then either keep chatting or exit with `/exit`. Context Service captures the native session state automatically. Capture is not a one-time event: each completed turn records a new revision of the session under `~/.contexts`. Each harness has its own integration point: hooks for Claude Code and Codex, a plugin for OpenCode, and an extension for Pi.
+
+Capture copies the harness's native session files for the project into `~/.contexts`, which only your user can read, and keeps every revision. `ctx attach` adds hooks to the project's `.claude/settings.local.json`, or the Codex, OpenCode, or Pi equivalent. Exports, sync, and backup copy full transcripts, including anything the agent read or was given, so check them for secrets before sending a context anywhere else.
 
 Inspect the result:
 
