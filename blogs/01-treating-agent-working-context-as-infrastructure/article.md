@@ -1,5 +1,7 @@
 # Treating agent working context as infrastructure
 
+_Who this is for: people building or running agent platforms and runtimes. Some sections assume basic Kubernetes familiarity._
+
 AI agents rarely finish meaningful work in one uninterrupted session. They gather files, retrieve evidence, make decisions, produce intermediate results, and leave behind artifacts that another agent or person may need later.
 
 That working material often has no clear home. Some of it lives in a project directory. Some remains in a conversation or an agent-specific state directory. Other pieces end up in object storage, a database, or a temporary execution environment. When the process stops, the laptop closes, or the work moves elsewhere, reconstructing the whole picture becomes difficult.
