@@ -4,9 +4,7 @@ The [previous post](../01-treating-agent-working-context-as-infrastructure/artic
 
 Most of the steps run entirely on your machine, with context stored under `~/.contexts`. The step that uploads to a PVC needs a Kubernetes cluster running Context Service.
 
-Context Service organizes this work around three connected capabilities.
-
-The first capability captures and moves working data. The second preserves history and relationships. The third turns captured work into reusable memory and knowledge. Sharing and access span all three.
+Context Service organizes this work around the three connected capabilities from the first post: capture and transport, history and relationships, and derived memory and knowledge. The sections below take them in turn.
 
 ![How Context Service works: agents capture into named contexts holding state, revisions, and derived knowledge, which sync, backup, and bundles move to PVC or S3-compatible storage under access grants.](images/context-service-architecture.svg)
 
@@ -78,7 +76,7 @@ Sharing is not a separate final stage. It applies across capture, history, and d
 
 One person might restore captured state into a later Claude Code session. Another might move the same project from Claude Code to Codex. Several agents might start from writable clones of one revision. A team might publish an immutable artifact while retaining the workspace and evidence that produced it.
 
-In a shared cluster, the problem also becomes one of ownership. A context needs an identity independent of its storage path. Explicit grants control who can discover, read, write, attach, derive from, or administer it. Unauthorized lookups do not reveal that the context exists.
+In a shared cluster, the problem also becomes one of ownership. A context needs an identity independent of its storage path. Explicit grants control who can discover, read, write, attach, derive from, or administer it. Unauthorized lookups do not reveal that the context exists. The [first post](../01-treating-agent-working-context-as-infrastructure/article.md) covers ownership in more depth.
 
 The execution platform still owns processes, sandboxes, and scheduling. Context Service owns context identity, history, access, and storage lifecycle. Keeping that boundary clear lets different agent and execution systems use the same context infrastructure without turning Context Service into another runtime.
 
@@ -160,26 +158,13 @@ Upload a context to a PVC with `sync`. Create a PVC-backed context, then push th
 ```console
 $ contextctl ctx create cloud-demo --type state
 
-$ contextctl ctx list
-CONTEXTS
-
-FILESYSTEM (1)
-demo  Ready · state
-└── path  /Users/daniel/.contexts/demo
-    └── Claude  1 sessions · 145.8 KiB
-    └── attached to Claude  /Users/daniel/projects/agent-notes
-
-PVC (1)
-cloud-demo  Ready · state
-└── pvc/context-cloud-demo  1Gi RWO · standard · namespace context-service
-
 $ contextctl ctx sync push demo --remote-name cloud-demo
 Uploading   100%  31.4 KiB / 31.4 KiB  31.4 KiB/s  00:01
 Synced demo to pvc/context-cloud-demo in namespace context-service
 Files: 3 (147.3 KiB)
 ```
 
-Depending on the cluster's storage class, `cloud-demo` can show `Provisioning` in the `ctx list` output until its volume is bound.
+Run `contextctl ctx list` to see it. Depending on the cluster's storage class, `cloud-demo` can show `Provisioning` until its volume is bound.
 
 `sync push` streams the bundle through Kubernetes and verifies its checksum before publishing the revision. The captured session ends up on storage next to your Kubernetes workloads, without a manual copy.
 
@@ -219,24 +204,7 @@ experiment  ready · state · filesystem
     └── Claude  1 sessions · 145.8 KiB
 ```
 
-The snapshot freezes an exact revision of the session. The clone is a new writable context that records the revision it came from, so you can take the work in a different direction without touching `demo`.
-
-```console
-$ contextctl ctx graph
-CONTEXT GRAPH (2)
-demo  state · filesystem · Ready · 4b0819b4b09d
-├── location  /Users/daniel/.contexts/demo
-├── derives  experiment@4b0819b4b09d · state · filesystem · ready
-├── consumer  harness/Claude · /Users/daniel/projects/agent-notes · attached
-├── copy  pvc/context-cloud-demo · namespace context-service · 4b0819b4b09d · ready
-└── copy  s3://daniel-agent-contexts/demo · ready
-
-experiment  state · filesystem · Ready · 4b0819b4b09d
-├── location  /Users/daniel/.contexts/experiment
-└── source  demo@4b0819b4b09d · state · filesystem · ready
-```
-
-The graph shows each context with its sources, derivatives, attached harness, and remote copies. Clones appear under the exact revision they came from, so the history of your work reads as a version tree you can inspect. The graph also lists `demo-copy` from the export and import step. This sample leaves it out to keep it short.
+The snapshot freezes an exact revision of the session. The clone is a new writable context that records the revision it came from, so you can take the work in a different direction without touching `demo`. The `ctx graph` view at the end of the tutorial shows how the two connect.
 
 ### 3. Generate memory and knowledge
 
@@ -308,11 +276,11 @@ experiment  state · filesystem · Ready · 4b0819b4b09d
 └── source  demo@4b0819b4b09d · state · filesystem · ready
 ```
 
-The final graph shows the captured state, its durable memory, the knowledge derived from both, and the exact revisions connecting them. As in the first graph, `demo-copy` is left out of the sample.
+The graph shows the captured state, its durable memory, the knowledge derived from both, and the exact revisions connecting them. It shows each context with its sources, derivatives, attached harness, and remote copies, and clones appear under the exact revision they came from, so the history of your work reads as a version tree you can inspect. The sample leaves out `demo-copy` from the export and import step to keep it short.
 
 ## What comes next
 
-Everything here ran on a single machine, with `contextctl` talking to local storage or a remote destination. Context Service also runs as a central service on Kubernetes, where other systems create contexts and mount them. The [next post](../03-delegating-local-agent-work-to-moca/article.md) uses that to delegate work from a local agent to remote agents: the agent packs a directory with `contextctl`, uploads it once as a frozen revision, and asks [Moca](https://github.com/rossoctl/moca) to run many tasks against it. The [first post](../01-treating-agent-working-context-as-infrastructure/article.md) covers why Context Service and the runtime stay separate.
+Everything here ran on a single machine, with `contextctl` talking to local storage or a remote destination. Context Service also runs as a central service on Kubernetes, where other systems create contexts and mount them. The [next post](../03-delegating-local-agent-work-to-moca/article.md) uses that to delegate work from a local agent to remote agents: the agent packs a directory with `contextctl`, uploads it once as a frozen revision, and asks [Moca](https://github.com/rossoctl/moca) to run many tasks against it.
 
 ## Learn more
 
