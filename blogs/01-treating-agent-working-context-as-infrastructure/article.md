@@ -38,6 +38,8 @@ This is not the context window that large language models use. It is the context
 - **Knowledge** is the understanding distilled from memory into reusable forms such as living wikis, documentation, and knowledge bases.
 - **Artifacts** are the outputs of the work: reports, patches, datasets, logs, and build products. A workspace is mutable while an agent works. An artifact is a published, immutable result.
 
+In the API, each layer is a context `type`: `state`, `workspace`, `memory`, `knowledge`, or `artifacts`. Execution context is the `state` type, the one the [next post](../02-capture-version-and-reuse-agent-context/article.md) uses.
+
 These layers are related but distinct. A workspace is not automatically memory, and a collection of memories is not automatically knowledge. Each layer has different needs for mutability, retention, sharing, and trust, and today each is often managed by a different tool, if it is managed at all.
 
 ## Storage is necessary, but it is not context
@@ -122,7 +124,7 @@ Sharing is not a separate final stage. It applies across capture, history, and d
 
 One person might restore captured state into a later Claude Code session. Another might move the same project from Claude Code to Codex. Several agents might start from writable clones of one revision. A team might publish an immutable artifact while retaining the workspace and evidence that produced it.
 
-In a shared cluster, the problem also becomes one of ownership. A context needs an identity independent of its storage path. Explicit grants control who can discover, read, write, attach, derive from, or administer it. Unauthorized lookups do not reveal that the context exists. Context Service authorizes the identity supplied by an authenticating gateway and does not validate credentials itself.
+In a shared cluster, the problem also becomes one of ownership. A context needs an identity independent of its storage path. Explicit grants control who can discover, read, write, attach, derive from, or administer it. Unauthorized lookups do not reveal that the context exists. Context Service authorizes the identity supplied by an authenticating gateway and does not validate credentials itself. In the prototype, that identity arrives in the `X-Context-Subject` header as `kind:name`, such as `user:alice`. A request without one is treated as `user:anonymous`.
 
 ## The difficult parts are boundaries, not storage
 
@@ -135,7 +137,7 @@ Implementation work has reinforced several design rules:
 - Context identity remains separate from its physical storage name.
 - Checksums are verified before a new revision becomes current.
 - Source references are immutable provenance.
-- Restore protects newer work before replacing it.
+- Before a local restore overwrites the current files, it saves them as a snapshot you can go back to.
 - Agent code does not receive infrastructure credentials or Kubernetes resources.
 - Access is checked before context is discovered or attached.
 - Context can outlive any one process or execution environment.
