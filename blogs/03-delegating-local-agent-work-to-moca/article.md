@@ -4,9 +4,9 @@ The [previous post](../02-capture-version-and-reuse-agent-context/article.md) us
 
 A local coding agent has an unusual advantage: it already understands the work in progress. It can inspect the repository, follow the conversation, identify the relevant files, and turn a broad request into smaller tasks.
 
-It also has familiar constraints. The laptop may need to close. A large analysis may take hours. Many independent tasks could run in parallel, but local compute limits how much work can happen at once. The remote servers where [Moca](https://github.com/rossoctl/moca) runs may also have specialized hardware that is more powerful than a typical laptop. Remote execution can help, but only if the remote agents receive the right working context and the user can trust where each task runs.
+It also has familiar constraints. The laptop may need to close. A large analysis may take hours. Many independent tasks could run in parallel, but local compute limits how much work can happen at once. [Moca](https://github.com/rossoctl/moca), IBM Research's open-source sandbox service for running agents, runs on remote servers that may also have specialized hardware that is more powerful than a typical laptop. Remote execution can help, but only if the remote agents receive the right working context and the user can trust where each task runs.
 
-The [`moca-delegate-task` skill](https://github.com/rossoctl/moca/tree/main/skills/moca-delegate-task) was built to explore that boundary. It teaches a local agent to select and package relevant files, upload them once as a Context Service revision, ask [Moca](https://github.com/rossoctl/moca) to execute one or many bounded tasks, collect the results, and clean up the temporary workload. [Moca](https://github.com/rossoctl/moca) is the workload-facing control plane that creates and selects the sandboxes where agents run. Context Service stores the context those sandboxes use.
+The [`moca-delegate-task` skill](https://github.com/rossoctl/moca/tree/main/skills/moca-delegate-task) was built to explore that boundary. It teaches a local agent to select and package relevant files, upload them once as a Context Service revision, ask [Moca](https://github.com/rossoctl/moca) to execute one or many bounded tasks, collect the results, and clean up the temporary workload. A skill is a set of instructions, packaged for an agent to follow. A bounded task that the local agent hands to a remote agent is called a subagent task in this post. [Moca](https://github.com/rossoctl/moca) creates and selects the sandboxes where agents run, and a Moca workload bundles one frozen context revision with the sandboxes that run tasks against it. Context Service stores the context those sandboxes use. The [first post](../01-treating-agent-working-context-as-infrastructure/article.md#terms-used-in-this-series) lists these terms.
 
 The work developed in two phases:
 
@@ -88,7 +88,7 @@ mocactl workloads create \
 3. asks the provisioner to create the workload's sandbox pods, the volume, and a Secret that holds a signed attach token binding the sandboxes to the workload and owner;
 4. seeds the volume from the frozen context revision, using the init containers of the workload's first pod;
 5. routes workload tasks only to sandboxes that attach with a verified token; and
-6. deletes the sandboxes and volume before deleting the Context.
+6. deletes the sandboxes and volume before deleting the workload's context.
 
 Context Service does not create the sandboxes. It supplies the frozen source revision, exactly as it does in Phase 1.
 
@@ -116,7 +116,7 @@ The [two-user demo](https://github.com/rossoctl/moca/tree/main/skills/moca-deleg
 - Alice writes a file in one task and reads it from both of her sandboxes later.
 - Bob's attempted write fails.
 - Forged sandbox registrations cannot claim another workload's identity.
-- Deleting both workloads removes their pods, services, credentials, volumes, and Contexts.
+- Deleting both workloads removes their pods, services, credentials, volumes, and contexts.
 - A workload created without dedicated sandboxes continues to use the Phase 1 shared-pool behavior.
 
 This is more than a happy-path demo. It tests the identity and routing boundaries that distinguish multi-user infrastructure from parallel execution on a shared machine.
