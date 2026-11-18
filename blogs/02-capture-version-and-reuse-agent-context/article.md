@@ -34,7 +34,7 @@ Moving files is useful. Knowing exactly what moved is more useful.
 
 Context Service assigns a content-derived revision to each distinct set of portable content. Repeated capture of unchanged files keeps the same revision. Changed content appends a new revision to the context history.
 
-Snapshots preserve important points in that history. Writable clones create independent branches for experiments or competing approaches. Restore protects the current state with a safety snapshot before replacing it, which prevents recovery from silently destroying later work.
+Snapshots preserve important points in that history. Writable clones create independent branches for experiments or competing approaches. Before a local restore overwrites the current files, it saves them as a safety snapshot you can go back to, so recovery never silently destroys later work.
 
 Lineage and provenance connect those revisions. When an agent derives memory, knowledge, or an artifact, the resulting context records the exact source context and revision. If the source changes later, the earlier result still explains what produced it.
 
@@ -84,7 +84,7 @@ The execution platform still owns processes, sandboxes, and scheduling. Context 
 
 ## Tutorial: Try It Locally
 
-You can explore all three capabilities without Kubernetes or a running Context Service API. The local CLI stores everything under `~/.contexts` by default.
+You can explore all three capabilities without Kubernetes or a running Context Service API. The local CLI stores everything under `~/.contexts` by default. The sample output below is trimmed, and your revision IDs, paths, and timestamps will differ.
 
 Install `contextctl`:
 
@@ -112,7 +112,7 @@ $ claude
 ❯ Remember that the project code word is violet telescope.
 ```
 
-Wait for its response, then either keep chatting or exit with `/exit`. Context Service captures the native session state automatically. Capture is not a one-time event: each completed turn records a new revision of the session under `~/.contexts`. This capture uses the hooks that `claude`, `codex`, `opencode`, and `pi` each provide.
+Wait for its response, then either keep chatting or exit with `/exit`. Context Service captures the native session state automatically. Capture is not a one-time event: each completed turn records a new revision of the session under `~/.contexts`. Each harness has its own integration point: hooks for Claude Code and Codex, a plugin for OpenCode, and an extension for Pi.
 
 Inspect the result:
 
@@ -134,7 +134,7 @@ REVISIONS (2)
 891b59183f30  capture · claude · 2026-11-17T17:39:48Z
 ```
 
-The single prompt produced two revisions: one when the response completed and one when the session ended. Each revision ID is derived from a hash of the captured content, so unchanged state does not add a duplicate entry.
+In this run, the single prompt produced two revisions: one when the response completed and one when the session ended. If you keep chatting instead of exiting, `ctx revisions` shows only the first. Each revision ID is derived from a hash of the captured content, so unchanged state does not add a duplicate entry.
 
 Now that the session is captured, you can do more with it than inspect it. A captured context is a verified, portable unit, so you can copy it, upload it to a PVC, or keep it backed up as it changes.
 
@@ -178,6 +178,8 @@ Uploading   100%  31.4 KiB / 31.4 KiB  31.4 KiB/s  00:01
 Synced demo to pvc/context-cloud-demo in namespace context-service
 Files: 3 (147.3 KiB)
 ```
+
+Depending on the cluster's storage class, `cloud-demo` can show `Provisioning` in the `ctx list` output until its volume is bound.
 
 `sync push` streams the bundle through Kubernetes and verifies its checksum before publishing the revision. The captured session ends up on storage next to your Kubernetes workloads, without a manual copy.
 
@@ -234,7 +236,7 @@ experiment  state · filesystem · Ready · 4b0819b4b09d
 └── source  demo@4b0819b4b09d · state · filesystem · ready
 ```
 
-The graph shows each context with its sources, derivatives, attached harness, and remote copies. Clones appear under the exact revision they came from, so the history of your work reads as a version tree you can inspect.
+The graph shows each context with its sources, derivatives, attached harness, and remote copies. Clones appear under the exact revision they came from, so the history of your work reads as a version tree you can inspect. The graph also lists `demo-copy` from the export and import step. This sample leaves it out to keep it short.
 
 ### 3. Generate memory and knowledge
 
@@ -306,7 +308,7 @@ experiment  state · filesystem · Ready · 4b0819b4b09d
 └── source  demo@4b0819b4b09d · state · filesystem · ready
 ```
 
-The final graph shows the captured state, its durable memory, the knowledge derived from both, and the exact revisions connecting them.
+The final graph shows the captured state, its durable memory, the knowledge derived from both, and the exact revisions connecting them. As in the first graph, `demo-copy` is left out of the sample.
 
 ## What comes next
 
