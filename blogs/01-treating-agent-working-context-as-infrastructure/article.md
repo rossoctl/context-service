@@ -6,7 +6,7 @@ That working material often has no clear home. Some of it lives in a project dir
 
 This article explores a straightforward idea: treat agent working context as infrastructure. Give it an identity, store it durably, track where it came from, and manage how agents capture, share, restore, and build on it. Context Service is an open source prototype for exploring that idea.
 
-This is the first of three posts. This one covers the idea and the shape of the service. The [second post](../02-capture-version-and-reuse-agent-context/article.md) is a hands-on tour of the `contextctl` command line, and the [third](../03-delegating-local-agent-work-to-moca/article.md) shows a local agent delegating work to remote agents through [Moca](https://github.com/rossoctl/moca).
+This is the first of three posts. This one covers the idea and the shape of the service. The [second post](../02-capture-version-and-reuse-agent-context/article.md) is a hands-on tour of the `contextctl` command line, and the [third](../03-delegating-local-agent-work-to-moca/article.md) shows a local agent delegating work to remote agents through [Moca](https://github.com/rossoctl/moca), IBM Research's open-source sandbox service for running agents. The terms these posts use are collected in [Terms used in this series](#terms-used-in-this-series).
 
 ## Agent work is fragmented and temporary
 
@@ -22,7 +22,7 @@ A directory is a good place to work, but it does not answer several important qu
 - Who owns the context, and who may use it?
 - Which sessions, agents, or environments currently consume it?
 
-Agent frameworks answer some of these questions within their own harness runtime. The result is useful but fragmented. Moving work between frameworks, machines, people, or remote environments can require custom export code and a new storage design each time.
+Agent frameworks answer some of these questions inside their own agent harness, the program that runs an agent, such as Claude Code or Codex. The result is useful but fragmented. Moving work between frameworks, machines, people, or remote environments can require custom export code and a new storage design each time.
 
 ## Context has five layers
 
@@ -80,7 +80,7 @@ The [next post](../02-capture-version-and-reuse-agent-context/article.md) walks 
 
 The command line is one way to use Context Service. It is also a server that runs in a Kubernetes cluster, so that platforms and agent runtimes can create and share context without each one managing storage itself.
 
-A caller asks for a named context and describes the storage it needs: a type, a size, and an access mode. Context Service creates a PersistentVolumeClaim from whatever storage class the cluster offers and returns a stable attachment that a runtime can mount:
+A caller asks for a named context and describes the storage it needs: a type, a size, and an access mode. Context Service creates a PersistentVolumeClaim from whatever storage class the cluster offers and returns a stable attachment, the name of the volume claim, that a runtime can mount:
 
 ```json
 {
@@ -95,9 +95,9 @@ A caller asks for a named context and describes the storage it needs: a type, a 
 }
 ```
 
-The access mode decides the workspace topology. `ReadWriteOnce` gives one workload a dedicated workspace with independent filesystem state and strong isolation. `ReadWriteMany` lets several Pods mount the same context, so they share one set of files and artifacts. Read-only access is enforced at the consumer's mount, not as a separate volume. The workload picks the topology, and the infrastructure supports both.
+The access mode decides how the context's volume is shared. `ReadWriteOnce` gives one Pod a dedicated volume with independent filesystem state and strong isolation. `ReadWriteMany` lets several Pods mount the same context, so they share one set of files and artifacts. Read-only access is enforced at the consumer's mount, not as a separate volume. The caller picks the topology, and the infrastructure supports both.
 
-Context is created at runtime, when a workload asks for it, not fixed when the platform is installed. The same service holds the context's revisions, snapshots, clones, grants, backup, and sync, whichever runtime mounts it.
+Context is created at runtime, when a caller asks for it, not fixed when the platform is installed. The same service holds the context's revisions, snapshots, clones, grants, backup, and sync, whichever runtime mounts it.
 
 ## The runtime and the context stay separate
 
@@ -110,13 +110,13 @@ Context Service draws the line there:
 | Context Service | Context identity, PVC lifecycle, revisions, snapshots, clones, access, backup, and sync |
 | Kubernetes and the storage driver | Volume provisioning, attachment, and mount enforcement |
 | The runtime, such as [Moca](https://github.com/rossoctl/moca) | Execution environments, routing, leases, and execution |
-| The agent workload | Declares what it needs and does the work; does not create infrastructure |
+| The agent | Declares what it needs and does the work; does not create infrastructure |
 
-[Moca](https://github.com/rossoctl/moca) is one such runtime. It is the workload-facing control plane that creates and selects the sandboxes where agents run. [Moca](https://github.com/rossoctl/moca) owns sandbox creation, routing, and release. Context Service owns the context those sandboxes mount. Deleting a sandbox never deletes its context, and Context Service never deletes a context that still has consumers unless forced.
+[Moca](https://github.com/rossoctl/moca) is one such runtime. It creates and selects the sandboxes where agents run, and it owns sandbox creation, routing, and release. Context Service owns the context those sandboxes mount. Deleting a sandbox never deletes its context, and Context Service never deletes a context that still has consumers, meaning sessions or Pods attached to it, unless forced.
 
 This boundary came from the first implementation. The project began with one concrete problem: creating sandbox compute with durable workspace storage for [Moca](https://github.com/rossoctl/moca). An early version of Context Service created the sandboxes itself. Once runtimes began creating their own execution environments, that part moved out, and Context Service kept the storage and context. The result is a smaller service with a clearer job.
 
-In the same spirit, [Moca](https://github.com/rossoctl/moca) builds its own workload API on top of Context Service. A workload bundles a frozen context revision with the sandboxes that run tasks against it, and a workload can get sandboxes and a mounted volume of its own. The third post covers that in detail. The pattern is the point: the runtime owns execution, Context Service owns context, and the two meet when a sandbox mounts durable context.
+In the same spirit, [Moca](https://github.com/rossoctl/moca) builds its own workload API on top of Context Service. A moca workload bundles a frozen context revision with the sandboxes that run tasks against it, and a workload can get sandboxes and a mounted volume of its own. The third post covers that in detail. The pattern is the point: the runtime owns execution, Context Service owns context, and the two meet when a sandbox mounts durable context.
 
 ## Sharing needs ownership
 
@@ -130,7 +130,7 @@ In a shared cluster, the problem also becomes one of ownership. A context needs 
 
 Persistent storage is necessary, but it is not the hardest part. The difficult questions appear where systems meet.
 
-Who is allowed to create a context? Who can publish a revision? Does an agent receive storage credentials, or does a trusted control plane materialize context on its behalf? When several users share a cluster, what prevents one workload from mounting another user's data? What happens if transfer succeeds but the consumer fails? When can storage be deleted safely?
+Who is allowed to create a context? Who can publish a revision? Does an agent receive storage credentials, or does a trusted control plane, a service that holds the credentials, materialize context on its behalf? When several users share a cluster, what prevents one workload from mounting another user's data? What happens if transfer succeeds but the consumer fails? When can storage be deleted safely?
 
 Implementation work has reinforced several design rules:
 
@@ -151,6 +151,20 @@ As agent work becomes longer, more collaborative, and more distributed, the dura
 Agent platforms do not all need to build incompatible systems for storage, backup, lineage, sharing, and knowledge generation. They can share a context layer while continuing to innovate in planning, tools, execution, and user experience.
 
 Context Service is still an early prototype, and its API is evolving. The open questions around identity, multi-user isolation, backend storage choice, collaboration, and knowledge quality are part of the exploration. But the central idea is already useful: give agent work a durable home, a history, and a path to become reusable knowledge.
+
+## Terms used in this series
+
+- **Working context** is the durable material an agent uses and creates while completing a task. It is split into five layers: execution, workspace, memory, knowledge, and artifacts.
+- **Agent harness** is the program that runs an agent, such as Claude Code, Codex, OpenCode, or Pi.
+- **Runtime** is the system that provides execution environments for agents, such as Moca.
+- **Context** is the Context Service resource that holds working context. It has a name, a type, and storage behind it.
+- **Revision** is a version Context Service records automatically whenever a context's captured content changes.
+- **Snapshot** is a named, immutable copy of one revision, kept under its own retention rules.
+- **Clone** is a new, writable context created from a snapshot.
+- **Consumer** is a session or Pod attached to a context.
+- **Moca workload** is Moca's unit of delegated work. It bundles a frozen context revision with the sandboxes that run tasks against it.
+- **Skill** is a set of instructions, packaged for an agent to follow.
+- **Subagent** is a bounded task that a local agent hands to a remote agent. The third post also calls it a remote agent.
 
 ## Learn more
 
